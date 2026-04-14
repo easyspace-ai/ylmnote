@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/easyspace-ai/ylmnote/internal/applog"
 	"github.com/easyspace-ai/ylmnote/internal/config"
 	"github.com/easyspace-ai/ylmnote/internal/infrastructure/persistence"
 	"github.com/easyspace-ai/ylmnote/internal/interfaces/http"
@@ -14,24 +15,27 @@ import (
 
 func main() {
 	cfg := config.Load()
+	applog.Init(cfg.AppEnv)
 	db, err := persistence.New(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("database: %v", err)
+		slog.Error("database_init_failed", slog.Any("err", err))
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	router := http.Wire(cfg, db)
 	srvAddr := fmt.Sprintf(":%s", cfg.HTTPPort)
-	log.Printf("🚀 YouMind Backend v2 (DDD + GORM) on %s (env=%s)", srvAddr, cfg.AppEnv)
+	slog.Info("server_listen", slog.String("addr", srvAddr), slog.String("env", cfg.AppEnv))
 
 	go func() {
 		if err := router.Run(srvAddr); err != nil {
-			log.Fatalf("http server: %v", err)
+			slog.Error("http_server_failed", slog.Any("err", err))
+			os.Exit(1)
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("👋 Shutting down...")
+	slog.Info("server_shutdown")
 }

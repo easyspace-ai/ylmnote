@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -133,6 +134,7 @@ func (s *Service) allocateUpstreamSessionID(ctx context.Context) (string, error)
 	}
 	id, err := s.aiSDK.EnsureSession(ctx, "")
 	if err != nil {
+		log.Printf("[project-sdk] EnsureSession(new) failed err=%v", err)
 		return "", fmt.Errorf("ensure upstream session failed: %w", err)
 	}
 	id = strings.TrimSpace(id)

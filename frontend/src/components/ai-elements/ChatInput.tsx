@@ -16,9 +16,10 @@ interface ChatInputProps {
   isStreaming?: boolean
   /** 远端未连接 / busy / blocked 时锁定输入 */
   upstreamLocked?: boolean
-  /** 远端 running/busy 时可发 Stop */
+  /** @deprecated 停止已合并到发送位：流式时用 onStop；保留仅为兼容 */
   canStop?: boolean
   stoppingUpstream?: boolean
+  /** 流式生成中点击「停止」：应中止本地 SSE 并视情况通知上游 */
   onStop?: () => void | Promise<void>
   mode?: ChatMode
   className?: string
@@ -33,7 +34,7 @@ export function ChatInput({
   disabled = false,
   isStreaming = false,
   upstreamLocked = false,
-  canStop = false,
+  canStop: _canStop = false,
   stoppingUpstream = false,
   onStop,
   className,
@@ -85,38 +86,38 @@ export function ChatInput({
         style={{ height: '24px' }}
       />
 
-      {canStop && onStop && (
+      {isStreaming && onStop ? (
         <button
           type="button"
-          title="停止远端运行"
+          title={stoppingUpstream ? '正在停止…' : '停止生成'}
           onClick={() => void onStop()}
-          disabled={stoppingUpstream || isStreaming}
+          disabled={stoppingUpstream}
           className={cn(
             'flex-shrink-0 flex items-center justify-center',
             'w-8 h-8 rounded-lg transition-all duration-200',
-            stoppingUpstream || isStreaming
+            stoppingUpstream
               ? 'bg-rose-100 text-rose-300 cursor-wait'
               : 'bg-rose-600 text-white hover:bg-rose-700'
           )}
         >
           <Square size={12} fill="currentColor" className="text-white" />
         </button>
+      ) : (
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={composeLocked || !value.trim()}
+          className={cn(
+            'flex-shrink-0 flex items-center justify-center',
+            'w-8 h-8 rounded-lg transition-all duration-200',
+            value.trim() && !composeLocked
+              ? 'bg-gray-900 text-white hover:bg-gray-800'
+              : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+          )}
+        >
+          <Send size={14} />
+        </button>
       )}
-
-      <button
-        type="button"
-        onClick={onSend}
-        disabled={composeLocked || !value.trim()}
-        className={cn(
-          'flex-shrink-0 flex items-center justify-center',
-          'w-8 h-8 rounded-lg transition-all duration-200',
-          value.trim() && !composeLocked
-            ? 'bg-gray-900 text-white hover:bg-gray-800'
-            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-        )}
-      >
-        <Send size={14} />
-      </button>
     </div>
   )
 }

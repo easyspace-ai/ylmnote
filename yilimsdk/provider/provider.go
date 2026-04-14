@@ -24,6 +24,8 @@ type Config struct {
 	UploadPath    string
 	WSPath        string
 	Timeout       time.Duration
+	// Debug 为 true 或与 AI_SDK_DEBUG 环境变量为真时，打印 WS / 上游请求细节
+	Debug bool
 }
 
 type Provider struct {
@@ -46,10 +48,11 @@ func New(cfg Config) *Provider {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 90 * time.Second
 	}
+	envDebug := strings.EqualFold(os.Getenv("AI_SDK_DEBUG"), "1") || strings.EqualFold(os.Getenv("AI_SDK_DEBUG"), "true")
 	return &Provider{
 		cfg:               cfg,
 		httpClient:        &http.Client{Timeout: cfg.Timeout},
-		debug:             strings.EqualFold(os.Getenv("AI_SDK_DEBUG"), "1") || strings.EqualFold(os.Getenv("AI_SDK_DEBUG"), "true"),
+		debug:             cfg.Debug || envDebug,
 		uploadLogFullBody: strings.EqualFold(os.Getenv("AI_SDK_UPLOAD_LOG_FULL_BODY"), "1") || strings.EqualFold(os.Getenv("AI_SDK_UPLOAD_LOG_FULL_BODY"), "true"),
 	}
 }
@@ -64,12 +67,16 @@ func (p *Provider) ensureSessionViaWS(ctx context.Context, sessionID string) (st
 	if err != nil {
 		return "", &types.SDKError{Code: types.ErrBadRequest, Message: "build ws url failed", Cause: err}
 	}
+	if p.debug {
+		log.Printf("[sdk-ensure] dial ws for session hint=%q", expectedSessionID)
+	}
 	header := http.Header{}
 	if p.cfg.ServiceAPIKey != "" {
 		header.Set("x-w6service-api-key", p.cfg.ServiceAPIKey)
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
 	if err != nil {
+		log.Printf("[sdk-ensure] ws dial failed hint=%q err=%v", expectedSessionID, err)
 		return "", mapTransportErr("ws dial failed", err)
 	}
 	defer conn.Close()
@@ -78,6 +85,7 @@ func (p *Provider) ensureSessionViaWS(ctx context.Context, sessionID string) (st
 		"type":    "auth",
 		"api_key": p.cfg.ServiceAPIKey,
 	}); err != nil {
+		log.Printf("[sdk-ensure] ws auth write failed hint=%q err=%v", expectedSessionID, err)
 		return "", mapTransportErr("ws auth write failed", err)
 	}
 
@@ -107,8 +115,12 @@ func (p *Provider) ensureSessionViaWS(ctx context.Context, sessionID string) (st
 
 	// 对已有会话 ID 做一次 API 校验，作为兼容兜底（仅已有会话，不用于新会话创建）。
 	if expectedSessionID != "" && p.verifyAgentExists(ctx, expectedSessionID) {
+		if p.debug {
+			log.Printf("[sdk-ensure] verified existing agent via HTTP id=%s", expectedSessionID)
+		}
 		return expectedSessionID, nil
 	}
+	log.Printf("[sdk-ensure] failed to resolve upstream session hint=%q (no id from WS and HTTP verify failed)", expectedSessionID)
 	return "", &types.SDKError{Code: types.ErrProtocol, Message: "upstream session id not found during ensure-session"}
 }
 
@@ -136,6 +148,9 @@ func (p *Provider) SendStop(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return &types.SDKError{Code: types.ErrBadRequest, Message: "session id is required for stop"}
 	}
+	if p.debug {
+		log.Printf("[sdk-stop] session=%s", sessionID)
+	}
 	wsURL, err := p.buildWSURL(sessionID)
 	if err != nil {
 		return &types.SDKError{Code: types.ErrBadRequest, Message: "build ws url failed", Cause: err}
@@ -148,6 +163,7 @@ func (p *Provider) SendStop(ctx context.Context, sessionID string) error {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, header)
 	if err != nil {
+		log.Printf("[sdk-stop] ws dial failed session=%s err=%v", sessionID, err)
 		return mapTransportErr("ws dial failed", err)
 	}
 	defer conn.Close()
@@ -157,6 +173,7 @@ func (p *Provider) SendStop(ctx context.Context, sessionID string) error {
 		"type":    "auth",
 		"api_key": p.cfg.ServiceAPIKey,
 	}); err != nil {
+		log.Printf("[sdk-stop] ws auth write failed session=%s err=%v", sessionID, err)
 		return mapTransportErr("ws auth write failed", err)
 	}
 
@@ -184,7 +201,11 @@ func (p *Provider) SendStop(ctx context.Context, sessionID string) error {
 
 	_ = conn.SetWriteDeadline(time.Now().Add(8 * time.Second))
 	if err := conn.WriteJSON(map[string]any{"type": "Stop"}); err != nil {
+		log.Printf("[sdk-stop] ws stop write failed session=%s err=%v", sessionID, err)
 		return mapTransportErr("ws stop write failed", err)
+	}
+	if p.debug {
+		log.Printf("[sdk-stop] sent Stop frame session=%s", sessionID)
 	}
 	return nil
 }
@@ -583,7 +604,8 @@ func extractAttachmentIDs(refs []types.ResourceRef) []string {
 			// 1) file_/src_ 前缀；
 			// 2) 来自 sdk-file: 的短 ID（如 dDuUc7r828SX），通常不带固定前缀。
 			if !strings.HasPrefix(c, "file_") && !strings.HasPrefix(c, "src_") {
-				if len(c) < 8 || strings.Contains(c, "-") || strings.Contains(c, "/") || strings.Contains(c, " ") {
+				// 上游 file id 可能是无连字符短串，也可能是标准 UUID；此前把带 "-" 的一律丢弃会导致 sdk-file 附件从未进入 WS attachments。
+				if len(c) < 8 || strings.Contains(c, "/") || strings.Contains(c, " ") {
 					continue
 				}
 			}

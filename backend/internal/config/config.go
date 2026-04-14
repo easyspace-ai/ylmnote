@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -21,6 +22,15 @@ type Config struct {
 	// All fields are loaded from environment variables (see .env.example).
 	W6  W6Config
 	SDK AISDKConfig
+
+	// CORSAllowedOrigins 逗号分隔；非 production 且为空时允许任意 Origin（开发便利）。
+	CORSAllowedOrigins string
+	// RateLimitAPIPerMinute 全站 /api（除 /api/auth 外）每 IP 每分钟请求上限。
+	RateLimitAPIPerMinute int
+	// RateLimitAuthPerMinute /api/auth 每 IP 每分钟上限（防爆破）。
+	RateLimitAuthPerMinute int
+	// ChatCreditCost 每轮成功对话结束后扣减的积分；0 表示关闭扣费。
+	ChatCreditCost int
 }
 
 // W6Config holds settings for the third-party W6 AI service.
@@ -42,13 +52,61 @@ type AISDKConfig struct {
 	TimeoutSec    int
 	RetryMax      int
 	LegacyMode    bool
+	// Debug 为 true 时打印 SDK / 上游 HTTP 详细日志（环境变量 AI_SDK_DEBUG=true）
+	Debug bool
+}
+
+// monorepoRoot 从 start 目录向上查找含有 backend/go.mod 的目录（即仓库根）。
+func monorepoRoot(start string) string {
+	d := start
+	for range 16 {
+		if _, err := os.Stat(filepath.Join(d, "backend", "go.mod")); err == nil {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	return ""
+}
+
+func loadDotEnv() {
+	if p := strings.TrimSpace(os.Getenv("DOTENV_PATH")); p != "" {
+		if err := godotenv.Load(p); err != nil {
+			log.Printf("warning: DOTENV_PATH load failed: %v", err)
+		}
+		return
+	}
+
+	if wd, err := os.Getwd(); err == nil {
+		if root := monorepoRoot(wd); root != "" {
+			envFile := filepath.Join(root, ".env")
+			if err := godotenv.Load(envFile); err == nil {
+				return
+			}
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		if sym, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = sym
+		}
+		if root := monorepoRoot(filepath.Dir(exe)); root != "" {
+			envFile := filepath.Join(root, ".env")
+			if err := godotenv.Load(envFile); err == nil {
+				return
+			}
+		}
+	}
+	if err := godotenv.Load(".env"); err != nil {
+		log.Printf("warning: .env not found (repo root .env or DOTENV_PATH): %v", err)
+	}
 }
 
 // Load 从 .env 加载配置，所有配置以 .env 为准，无代码内默认值（除端口为空时用 8080 以便启动）
 func Load() *Config {
-	if err := godotenv.Load(); err != nil {
-		log.Printf("warning: .env not found: %v", err)
-	}
+	loadDotEnv()
 	cfg := &Config{
 		AppName:              getEnv("APP_NAME"),
 		AppEnv:               getEnv("APP_ENV"),
@@ -73,7 +131,12 @@ func Load() *Config {
 			TimeoutSec:    getEnvInt("AI_SDK_TIMEOUT_SEC"),
 			RetryMax:      getEnvInt("AI_SDK_RETRY_MAX"),
 			LegacyMode:    getEnvBool("AI_SDK_LEGACY_MODE"),
+			Debug:         getEnvBool("AI_SDK_DEBUG"),
 		},
+		CORSAllowedOrigins:     strings.TrimSpace(getEnv("CORS_ALLOWED_ORIGINS")),
+		RateLimitAPIPerMinute:  getEnvIntDefault("RATE_LIMIT_API_PER_MINUTE", 180),
+		RateLimitAuthPerMinute: getEnvIntDefault("RATE_LIMIT_AUTH_PER_MINUTE", 30),
+		ChatCreditCost:         getEnvIntDefault("CHAT_CREDIT_COST", 1),
 	}
 	if cfg.DatabaseURL == "" {
 		log.Fatal("DATABASE_URL is required (set in .env)")
@@ -134,6 +197,18 @@ func getEnvInt(key string) int {
 	n, err := strconv.Atoi(v)
 	if err != nil {
 		return 0
+	}
+	return n
+}
+
+func getEnvIntDefault(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
 	}
 	return n
 }

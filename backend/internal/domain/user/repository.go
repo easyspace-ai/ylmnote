@@ -10,4 +10,7 @@ type Repository interface {
 	GetByUsernameOrEmail(value string) (*User, error)
 	ExistsByUsernameOrEmail(username, email string) (bool, error)
 	Update(u *User) error
+
+	// ChargeCredits 在余额充足时原子扣减 credits，并写入 transactions（amount 为负数表示消费）。
+	ChargeCredits(userID string, amount int, reason string, projectID, messageID, modelID *string) error
 }

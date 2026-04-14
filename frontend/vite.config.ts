@@ -11,7 +11,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../go-backend/static',
+    outDir: '../bin/static',
     emptyOutDir: true,
   },
   server: {

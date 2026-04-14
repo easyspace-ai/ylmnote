@@ -77,6 +77,22 @@ type ResourceModel struct {
 
 func (ResourceModel) TableName() string { return "resources" }
 
+// TransactionModel 积分流水
+type TransactionModel struct {
+	ID                string    `gorm:"primaryKey"`
+	UserID            string    `gorm:"index;not null"`
+	Amount            int       `gorm:"not null"`
+	Reason            string    `gorm:"not null"`
+	PromptTokens      *int      `gorm:"column:prompt_tokens"`
+	CompletionTokens  *int      `gorm:"column:completion_tokens"`
+	ModelID           *string   `gorm:"column:model_id"`
+	ProjectID         *string   `gorm:"column:project_id"`
+	MessageID         *string   `gorm:"column:message_id"`
+	CreatedAt         time.Time `gorm:"not null"`
+}
+
+func (TransactionModel) TableName() string { return "transactions" }
+
 // PromptTemplateModel GORM Studio 提示词模板表模型
 type PromptTemplateModel struct {
 	ID         string    `gorm:"primaryKey"`

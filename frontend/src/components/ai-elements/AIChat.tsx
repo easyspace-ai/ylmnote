@@ -4,15 +4,17 @@
  * 整合所有 ai-elements 组件，提供开箱即用的聊天界面
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { cn } from '@/utils'
+import { useAppStore } from '@/stores/apiStore'
 import type {
   ChatMessage,
   ChatMode,
-  Skill,
   Attachment,
   TodoItem,
   ModelOption,
+  StudioAction,
 } from './types'
 
 // 子组件导入
@@ -23,16 +25,19 @@ import { TodoList } from './TodoList'
 import { AttachmentList } from './AttachmentList'
 import { ModeSelector } from './ModeSelector'
 import { ModelSelector } from './ModelSelector'
-import { SkillSelector } from './SkillSelector'
-import { HardDrive, Folder, X } from 'lucide-react'
+import { StudioActionsPopover } from './StudioActionsPopover'
+import { ResourcePickerPopover } from './ResourcePickerPopover'
+import { HardDrive, Folder, Zap } from 'lucide-react'
 
 interface AIChatProps {
   // 数据
   messages: ChatMessage[]
-  skills?: Skill[]
   models?: ModelOption[]
   libraryFiles?: { id: string; name: string }[]
   todoItems?: TodoItem[]
+  /** 与右侧 Studio 栏一致的动作列表 */
+  studioActions?: StudioAction[]
+  onRunStudioTool?: (action: StudioAction) => void | Promise<void>
 
   // 状态
   isStreaming?: boolean
@@ -47,7 +52,6 @@ interface AIChatProps {
 
   // 配置
   initialMode?: ChatMode
-  initialSkill?: string | null
   initialModel?: string
   autoFocus?: boolean
   showTodos?: boolean
@@ -67,7 +71,6 @@ interface AIChatProps {
   onRegenerate?: () => void
   onSaveAsDocument?: (content: string) => void
   onModeChange?: (mode: ChatMode) => void
-  onSkillChange?: (skillId: string | null) => void
   onModelChange?: (modelId: string) => void
   onTodoToggle?: (id: string, done: boolean) => void
 
@@ -77,10 +80,11 @@ interface AIChatProps {
 
 export function AIChat({
   messages,
-  skills = [],
   models,
   libraryFiles = [],
   todoItems = [],
+  studioActions = [],
+  onRunStudioTool,
   isStreaming = false,
   isLoadingOlder = false,
   hasMoreOlder = false,
@@ -91,7 +95,6 @@ export function AIChat({
   stoppingUpstream = false,
   onUpstreamStop,
   initialMode = 'chat',
-  initialSkill = null,
   initialModel = 'google/gemini-3-flash-preview',
   autoFocus = false,
   showTodos = true,
@@ -101,18 +104,54 @@ export function AIChat({
   onRegenerate,
   onSaveAsDocument,
   onModeChange,
-  onSkillChange,
   onModelChange,
   onTodoToggle,
   className,
 }: AIChatProps) {
+  const navigate = useNavigate()
+
   // 状态
   const [inputValue, setInputValue] = useState('')
   const [mode, setMode] = useState<ChatMode>(initialMode)
-  const [selectedSkill, setSelectedSkill] = useState<string | null>(initialSkill)
   const [selectedModel, setSelectedModel] = useState(initialModel)
   const [attachments, setAttachments] = useState<Attachment[]>([])
-  const [showLibraryPicker, setShowLibraryPicker] = useState(false)
+  const [showStudioPicker, setShowStudioPicker] = useState(false)
+  const [showResourcePicker, setShowResourcePicker] = useState(false)
+
+  const triggersSlashMenu = (v: string) => {
+    if (!v.endsWith('/')) return false
+    if (v.length === 1) return true
+    return /\s/.test(v[v.length - 2] as string)
+  }
+
+  const triggersResourceMenu = (v: string) => {
+    if (!v.endsWith('@')) return false
+    if (v.length === 1) return true
+    return /\s/.test(v[v.length - 2] as string)
+  }
+
+  const handleInputValueChange = useCallback(
+    (v: string) => {
+      if (triggersSlashMenu(v)) {
+        if (onRunStudioTool) {
+          setShowResourcePicker(false)
+          setShowStudioPicker(true)
+          setInputValue(v.slice(0, -1))
+        } else {
+          setInputValue(v)
+        }
+        return
+      }
+      if (triggersResourceMenu(v)) {
+        setShowStudioPicker(false)
+        setShowResourcePicker(true)
+        setInputValue(v.slice(0, -1))
+        return
+      }
+      setInputValue(v)
+    },
+    [onRunStudioTool]
+  )
 
   // 处理模式变化
   const handleModeChange = useCallback(
@@ -121,15 +160,6 @@ export function AIChat({
       onModeChange?.(newMode)
     },
     [onModeChange]
-  )
-
-  // 处理技能变化
-  const handleSkillChange = useCallback(
-    (skillId: string | null) => {
-      setSelectedSkill(skillId)
-      onSkillChange?.(skillId)
-    },
-    [onSkillChange]
   )
 
   // 处理模型变化
@@ -147,24 +177,42 @@ export function AIChat({
 
     onSendMessage(inputValue, {
       mode,
-      skill: selectedSkill,
+      skill: null,
       attachments,
       model: selectedModel,
     })
 
     setInputValue('')
-    // 注意：附件是否清空取决于业务需求
-    // setAttachments([])
+    setAttachments([])
   }, [
     inputValue,
     isStreaming,
     upstreamInputLocked,
     mode,
-    selectedSkill,
     attachments,
     selectedModel,
     onSendMessage,
   ])
+
+  const handleStopGeneration = useCallback(() => {
+    if (onUpstreamStop) {
+      void onUpstreamStop()
+      return
+    }
+    useAppStore.getState().abortActiveMessageStream()
+  }, [onUpstreamStop])
+
+  useEffect(() => {
+    if (!showStudioPicker && !showResourcePicker) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowStudioPicker(false)
+        setShowResourcePicker(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showStudioPicker, showResourcePicker])
 
   // 处理添加本地文件
   const handleAddLocalFile = useCallback(() => {
@@ -195,13 +243,14 @@ export function AIChat({
   const handleAddFromLibrary = useCallback(
     (file: { id: string; name: string }) => {
       if (upstreamInputLocked || isStreaming) return
+      // id 必须为项目资源的真实 ID；handleSendMessage 会原样写入 resource_refs。
       const attachment: Attachment = {
-        id: `library-${file.id}`,
+        id: file.id,
         name: file.name,
         type: 'library',
       }
       setAttachments((prev) => [...prev, attachment])
-      setShowLibraryPicker(false)
+      setShowResourcePicker(false)
     },
     [upstreamInputLocked, isStreaming]
   )
@@ -226,7 +275,7 @@ export function AIChat({
       />
 
       {/* 待办列表 */}
-      {showTodos && todoItems.length > 0 && (
+      {/* {showTodos && todoItems.length > 0 && (
         <div className="px-4 pb-2">
           <TodoList
             items={todoItems}
@@ -234,7 +283,7 @@ export function AIChat({
             onItemToggle={onTodoToggle}
           />
         </div>
-      )}
+      )} */}
 
       {/* 输入区域 */}
       <div className="border-t border-gray-100 px-4 py-3">
@@ -251,43 +300,37 @@ export function AIChat({
           )}
 
           {/* 输入框容器 */}
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm shadow-gray-900/5 overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-300 transition-all duration-200">
-            {/* 技能标签（如果有选择） */}
-            {selectedSkill && (
-              <div className="px-3 pt-2.5">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 border border-indigo-100 text-xs font-medium text-indigo-700 rounded-lg">
-                  <span>{skills.find((s) => s.id === selectedSkill)?.icon}</span>
-                  <span>{skills.find((s) => s.id === selectedSkill)?.name}</span>
-                  <button
-                    onClick={() => handleSkillChange(null)}
-                    className="p-0.5 hover:bg-indigo-100 rounded transition-colors"
-                  >
-                    <span className="sr-only">移除</span>
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
+          <div className="relative rounded-xl border border-gray-200 bg-white shadow-sm shadow-gray-900/5 overflow-visible focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-300 transition-all duration-200">
+            {showStudioPicker && onRunStudioTool && (
+              <StudioActionsPopover
+                tools={studioActions}
+                onClose={() => setShowStudioPicker(false)}
+                onPick={(tool) => void onRunStudioTool(tool)}
+                onExploreMore={() => navigate('/skills')}
+                onManage={() => navigate('/settings')}
+              />
+            )}
+            {showResourcePicker && (
+              <ResourcePickerPopover
+                files={libraryFiles}
+                onClose={() => setShowResourcePicker(false)}
+                onPick={handleAddFromLibrary}
+              />
             )}
 
             {/* 文本输入 */}
-            <div className="px-3 pt-2.5 pb-2">
+            <div className="px-3 pt-2.5 pb-2 overflow-hidden rounded-xl">
               <ChatInput
                 value={inputValue}
-                onChange={setInputValue}
+                onChange={handleInputValueChange}
                 onSend={handleSend}
-                placeholder={
-                  selectedSkill
-                    ? `使用 ${skills.find((s) => s.id === selectedSkill)?.name}...`
-                    : '输入你的问题，或按 / 选择技能...'
-                }
+                placeholder="输入你的问题，按 / 打开 Studio 动作，按 @ 引用资料..."
                 disabled={false}
                 isStreaming={isStreaming}
                 upstreamLocked={upstreamInputLocked}
                 canStop={upstreamCanStop}
                 stoppingUpstream={stoppingUpstream}
-                onStop={onUpstreamStop}
+                onStop={handleStopGeneration}
                 autoFocus={autoFocus}
               />
             </div>
@@ -312,7 +355,11 @@ export function AIChat({
                 </button>
                 <button
                   type="button"
-                  onClick={() => !upstreamInputLocked && !isStreaming && setShowLibraryPicker(true)}
+                  onClick={() => {
+                    if (upstreamInputLocked || isStreaming) return
+                    setShowStudioPicker(false)
+                    setShowResourcePicker(true)
+                  }}
                   disabled={upstreamInputLocked || isStreaming}
                   className={cn(
                     'flex items-center gap-1 px-2 py-1 text-xs rounded-md transition-colors',
@@ -329,85 +376,45 @@ export function AIChat({
               <div className="w-px h-4 bg-gray-200" />
 
               {/* 模式选择 */}
-              <ModeSelector mode={mode} onChange={handleModeChange} />
+              {/* <ModeSelector mode={mode} onChange={handleModeChange} /> */}
 
-              <div className="w-px h-4 bg-gray-200" />
+              {/* <div className="w-px h-4 bg-gray-200" /> */}
 
-              {/* 技能选择 */}
-              <SkillSelector
-                skills={skills}
-                selectedSkill={selectedSkill}
-                onSelect={handleSkillChange}
-              />
+              {/* Studio 动作（与右侧栏一致） */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (upstreamInputLocked || isStreaming) return
+                  setShowResourcePicker(false)
+                  setShowStudioPicker((v) => !v)
+                }}
+                disabled={upstreamInputLocked || isStreaming || !onRunStudioTool}
+                className={cn(
+                  'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200',
+                  showStudioPicker
+                    ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                    : 'border-gray-200 bg-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700',
+                  (!onRunStudioTool || upstreamInputLocked || isStreaming) && 'opacity-50 cursor-not-allowed'
+                )}
+              >
+                <Zap size={12} className={showStudioPicker ? 'text-indigo-500' : 'text-gray-400'} />
+                <span>技能</span>
+              </button>
 
-              <div className="w-px h-4 bg-gray-200" />
+              {/* <div className="w-px h-4 bg-gray-200" /> */}
 
-              {/* 模型选择 */}
+              {/* 模型选择
               <ModelSelector
                 selectedModel={selectedModel}
                 onSelect={handleModelChange}
                 models={models}
-              />
+              /> */}
             </div>
           </div>
         </div>
       </div>
 
-      {/* 资料库选择弹窗 */}
-      {showLibraryPicker && (
-        <LibraryPickerModal
-          isOpen={showLibraryPicker}
-          onClose={() => setShowLibraryPicker(false)}
-          files={libraryFiles}
-          onSelect={handleAddFromLibrary}
-        />
-      )}
+      {/* 居中「从资料库选择」弹窗已停用，改为输入区 @ 或「资料库」按钮的浮层列表 */}
     </ChatContainer>
-  )
-}
-
-// 资料库选择弹窗
-function LibraryPickerModal({
-  isOpen,
-  onClose,
-  files,
-  onSelect,
-}: {
-  isOpen: boolean
-  onClose: () => void
-  files: { id: string; name: string }[]
-  onSelect: (file: { id: string; name: string }) => void
-}) {
-  if (!isOpen) return null
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">从资料库选择</h2>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X size={18} />
-          </button>
-        </div>
-        <div className="max-h-[60vh] overflow-y-auto p-4 space-y-1.5">
-          {files.map((file) => (
-            <div
-              key={file.id}
-              onClick={() => onSelect(file)}
-              className="flex items-center gap-3 p-3 hover:bg-gray-50 cursor-pointer rounded-xl transition-colors"
-            >
-              <div className="p-2 bg-gray-100 rounded-lg">
-                <Folder size={16} className="text-gray-400" />
-              </div>
-              <span className="text-sm text-gray-700">{file.name}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
   )
 }

@@ -1,7 +1,11 @@
 package persistence
 
 import (
+	"time"
+
 	"github.com/easyspace-ai/ylmnote/internal/domain/user"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // UserRepository 用户仓储 GORM 实现
@@ -59,6 +63,37 @@ func (r *UserRepository) ExistsByUsernameOrEmail(username, email string) (bool, 
 func (r *UserRepository) Update(u *user.User) error {
 	m := toUserModel(u)
 	return r.db.Save(m).Error
+}
+
+// ChargeCredits 原子扣减积分并记流水；amount 为正数时表示要扣的积分数（内部写入 transactions.amount 为负）。
+func (r *UserRepository) ChargeCredits(userID string, amount int, reason string, projectID, messageID, modelID *string) error {
+	if amount <= 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Exec(`
+			UPDATE users
+			SET credits_balance = credits_balance - ?, credits_used = credits_used + ?
+			WHERE id = ? AND credits_balance >= ?`,
+			amount, amount, userID, amount)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return user.ErrInsufficientCredits
+		}
+		row := TransactionModel{
+			ID:        uuid.NewString(),
+			UserID:    userID,
+			Amount:    -amount,
+			Reason:    reason,
+			ProjectID: projectID,
+			MessageID: messageID,
+			ModelID:   modelID,
+			CreatedAt: time.Now().UTC(),
+		}
+		return tx.Create(&row).Error
+	})
 }
 
 func toUserModel(u *user.User) *UserModel {

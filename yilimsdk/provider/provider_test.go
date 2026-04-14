@@ -330,3 +330,12 @@ func TestExtractAttachmentIDsFromSDKFileURL(t *testing.T) {
 		t.Fatalf("unexpected attachment ids: %#v", got)
 	}
 }
+
+func TestExtractAttachmentIDsFromSDKFileUUID(t *testing.T) {
+	u := "550e8400-e29b-41d4-a716-446655440000"
+	refs := []types.ResourceRef{{ID: "db-resource-row-uuid", URL: "sdk-file:" + u}}
+	got := extractAttachmentIDs(refs)
+	if len(got) != 1 || got[0] != u {
+		t.Fatalf("expected uuid attachment id, got %#v", got)
+	}
+}

@@ -8,8 +8,8 @@ import { useRef, useEffect, useMemo, useCallback } from 'react'
 import { cn } from '@/utils'
 import type { ChatMessage } from './types'
 import { MessageBubble } from './MessageBubble'
-import { ThinkingProcess } from './ThinkingProcess'
 import { StreamingIndicator } from './StreamingIndicator'
+import { ThinkingProcess } from './ThinkingProcess'
 
 interface MessageGroup {
   type: 'message' | 'process-group'
@@ -146,9 +146,9 @@ export function MessageList({
               return (
                 <ThinkingProcess
                   key={group.id}
-                  steps={group.steps || []}
+                  steps={group.steps!}
                   isStreaming={isStreaming}
-                  isLatestGroup={group.hasLatestAssistant || false}
+                  isLatestGroup={group.hasLatestAssistant}
                 />
               )
             }

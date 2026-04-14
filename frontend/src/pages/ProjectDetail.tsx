@@ -1,5 +1,5 @@
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { 
   FileText, Link as LinkIcon, StickyNote,
@@ -14,21 +14,15 @@ import { ProjectHeader } from '@/components/project-detail/ProjectHeader'
 import { LeftPane } from '@/components/project-detail/LeftPane'
 import { RightStudioPane } from '@/components/project-detail/RightStudioPane'
 import { useAppStore } from '@/stores/apiStore'
+import { queryClient } from '@/lib/queryClient'
 import { useSessionSync } from '@/hooks/useSessionSync'
+import { useUpstreamGate } from '@/hooks/useUpstreamGate'
 import { useSidebarStore } from '@/components/layout/Sidebar'
 import { chatApi, projectApi } from '@/services/api'
+import { useQueryClient } from '@tanstack/react-query'
 
 type ResourceType = 'documents' | 'links' | 'notes'
 type MainTabType = 'resources' | 'chat'
-
-type UpstreamGatePayload = {
-  upstream_session_id: string
-  status: string
-  phase: string
-  input_locked: boolean
-  can_stop: boolean
-  detail?: string
-}
 
 const getLastSessionStorageKey = (projectId: string) => `youmind:last-session:${projectId}`
 
@@ -105,12 +99,10 @@ export default function ProjectDetail() {
   const navigate = useNavigate()
   const { 
     currentProject,
-    projects,
     sessions,
-    fetchProjects,
     fetchSessions,
     loadOlderMessages,
-    hydrateSessionMessagesFromCache,
+    fetchMessagesBySession,
     setActiveMessageSession,
     clearSessionMessages,
     createSession,
@@ -120,13 +112,12 @@ export default function ProjectDetail() {
     liveTodosBySession,
     messagePagination,
     installedSkills,
-    recommendedSkills,
     loading,
     fetchProject,
     fetchMessages,
     fetchInstalledSkills,
-    fetchRecommendedSkills,
     sendMessageStream,
+    abortActiveMessageStream,
     sendW6PageFromOutlineStream,
     syncSessionState,
     getSessionSyncMeta,
@@ -158,8 +149,6 @@ export default function ProjectDetail() {
   const [leftWidth, setLeftWidth] = useState(280)
   const [isRightCollapsed, setIsRightCollapsed] = useState(false)
   const [rightWidth, setRightWidth] = useState(280)
-  const [studioOutputScope, setStudioOutputScope] = useState<'session' | 'project'>('session')
-  const [outputOriginFilter, setOutputOriginFilter] = useState<'all' | 'generated' | 'uploaded'>('all')
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
 
   // 拖拽相关状态
@@ -254,17 +243,24 @@ export default function ProjectDetail() {
     return () => { cancelled = true }
   }, [id, urlSessionId, fetchProject, fetchSessions, createSession, navigate])
 
-  // 会话路由切换时，先切换激活会话并清空消息，防止旧会话异步回包覆盖当前视图。
+  // 会话路由切换：先中止流、切激活会话；消息走 fetchMessagesBySession（先读 localStorage 再拉本地 DB），避免仅 hydrate 与远端/落库长期不一致。
   useEffect(() => {
+    abortActiveMessageStream()
     setActiveMessageSession(urlSessionId)
     if (id && urlSessionId) {
-      hydrateSessionMessagesFromCache(id, urlSessionId)
+      void fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
     } else if (urlSessionId) {
       clearSessionMessages(urlSessionId)
     } else {
       clearSessionMessages()
     }
-  }, [id, urlSessionId, setActiveMessageSession, hydrateSessionMessagesFromCache, clearSessionMessages])
+  }, [id, urlSessionId, abortActiveMessageStream, setActiveMessageSession, fetchMessagesBySession, clearSessionMessages])
+
+  useEffect(() => {
+    return () => {
+      useAppStore.getState().abortActiveMessageStream()
+    }
+  }, [])
 
   // 有 projectId + sessionId 时：加载项目、会话列表、该会话消息、资源
   useEffect(() => {
@@ -274,13 +270,17 @@ export default function ProjectDetail() {
 
       Promise.all([
         fetchProject(id),
-        fetchProjects(),
+        queryClient.refetchQueries({ queryKey: ['projects'] }),
         fetchSessions(id),
         fetchResources(id),
         fetchPromptTemplates(),
         fetchInstalledSkills(),
-        fetchRecommendedSkills(),
-      ]).finally(() => {
+      ])
+        .then(async () => {
+          // 资源与会话列表就绪后再 sync：把上游产物/时间线写入本地 DB，并 refreshMessages（避免与 useSessionSync 首帧 inFlight 竞态导致跳过刷新）
+          await useAppStore.getState().syncSessionState(id, urlSessionId, { refreshMessages: true })
+        })
+        .finally(() => {
           setIsInitializing(false)
           if (autoSendFromState && initialMessage && hasAutoSentForProject.current !== id) {
             hasAutoSentForProject.current = id
@@ -314,85 +314,43 @@ export default function ProjectDetail() {
     enabled: Boolean(id && urlSessionId),
     intervalMs: 45_000,
     refreshMessages: true,
+    skipInitialSync: true,
     syncSessionState,
     sessionSyncMeta: currentSyncMeta,
   })
 
-  const [upstreamGate, setUpstreamGate] = useState<UpstreamGatePayload | null>(null)
-  const [upstreamGateLoading, setUpstreamGateLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const {
+    upstreamGateLoading,
+    upstreamInputLocked,
+    upstreamCanStop,
+    upstreamBannerText,
+    refetchGate,
+  } = useUpstreamGate({
+    projectId: id,
+    sessionId: urlSessionId,
+    enabled: Boolean(id && urlSessionId),
+    isStreaming,
+  })
+
   const [stoppingUpstream, setStoppingUpstream] = useState(false)
 
-  const refreshUpstreamGate = useCallback(async () => {
-    if (!id || !urlSessionId) return
-    try {
-      const g = await chatApi.getUpstreamGate({ projectId: id, sessionId: urlSessionId })
-      setUpstreamGate(g)
-    } catch (e) {
-      console.error(e)
-      setUpstreamGate({
-        upstream_session_id: '',
-        status: '',
-        phase: 'offline',
-        input_locked: true,
-        can_stop: false,
-        detail: '无法获取远端状态',
-      })
-    } finally {
-      setUpstreamGateLoading(false)
-    }
-  }, [id, urlSessionId])
-
+  const wasStreamingRef = useRef(false)
   useEffect(() => {
-    setUpstreamGate(null)
-    setUpstreamGateLoading(true)
-  }, [id, urlSessionId])
-
-  useEffect(() => {
-    if (!id || !urlSessionId) return
-    let cancelled = false
-    const tick = async () => {
-      if (cancelled) return
-      await refreshUpstreamGate()
+    if (wasStreamingRef.current && !isStreaming && id && urlSessionId) {
+      void queryClient.invalidateQueries({ queryKey: ['upstreamGate', id, urlSessionId] })
     }
-    void tick()
-    if (isStreaming) {
-      return () => {
-        cancelled = true
-      }
-    }
-    const timer = window.setInterval(tick, 2500)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [id, urlSessionId, isStreaming, refreshUpstreamGate])
-
-  const upstreamInputLocked = upstreamGateLoading || Boolean(upstreamGate?.input_locked)
-  const upstreamCanStop = !upstreamGateLoading && Boolean(upstreamGate?.can_stop)
-  const upstreamBannerText =
-    upstreamGateLoading
-      ? '正在检查远端 Agent…'
-      : upstreamGate?.detail
-        ? upstreamGate.detail
-        : upstreamGate?.phase === 'busy'
-          ? '远端正在运行，可先停止后再输入'
-          : upstreamGate?.phase === 'blocked'
-            ? `远端处理中（${upstreamGate.status || '准备中'}），请稍候`
-            : upstreamGate?.phase === 'offline'
-              ? '无法连接远端，请检查网络或上游服务'
-              : upstreamGate?.phase === 'unbound'
-                ? upstreamGate?.input_locked
-                  ? '会话未绑定远端 Agent，无法发送'
-                  : null
-                : null
+    wasStreamingRef.current = isStreaming
+  }, [isStreaming, id, urlSessionId, queryClient])
 
   const handleUpstreamStop = async () => {
     if (!id || !urlSessionId) return
     setStoppingUpstream(true)
     try {
+      useAppStore.getState().abortActiveMessageStream()
       await chatApi.stopUpstream({ projectId: id, sessionId: urlSessionId })
       addToast('success', '已发送停止指令')
-      await refreshUpstreamGate()
+      await refetchGate()
     } catch (e: any) {
       addToast('error', e?.message || '停止失败')
     } finally {
@@ -405,8 +363,8 @@ export default function ProjectDetail() {
     const newName = prompt(`重命名对话:`, currentProject.name)
     if (newName && newName !== currentProject.name) {
       await updateProject(id, { name: newName })
-      fetchProject(id)
-        fetchProjects()
+      await fetchProject(id)
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
     }
   }
 
@@ -415,7 +373,7 @@ export default function ProjectDetail() {
     if (confirm(`确定要归档当前对话 "${currentProject.name}" 吗？`)) {
       await updateProject(id, { status: 'archived' })
       addToast('success', '对话已归档')
-      fetchProjects()
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
       navigate('/')
     }
   }
@@ -514,19 +472,6 @@ export default function ProjectDetail() {
     )
   }
   
-  // 技能转换
-  const skills = installedSkills.map(s => ({
-    id: s.id,
-    name: s.name,
-    icon: s.icon || '📦'
-  }))
-  
-  const recSkills = recommendedSkills.map(s => ({
-    id: s.id,
-    name: s.name,
-    icon: s.icon || '📦'
-  }))
-  
   // 消息转换
   const chatMessages: ChatMessage[] = messages.map(m => ({
     // 兼容后端回传的 process 元信息，先在现有聊天组件里渲染“思考/过程”折叠块。
@@ -564,13 +509,24 @@ export default function ProjectDetail() {
     if (r.type === 'output' && (r.content || '').trim()) return 'generated' as const
     return 'uploaded' as const
   }
-  const scopedOutputResources = outputResources.filter((r) => {
-    if (studioOutputScope === 'project') return true
-    return !!urlSessionId && r.session_id === urlSessionId
-  })
-  const filteredOutputResources = scopedOutputResources.filter((r) => {
-    if (outputOriginFilter === 'all') return true
-    return detectOutputOrigin(r) === outputOriginFilter
+  /** 上游同步的 artifact 中，图片/音视频等多为用户上传附件，不应出现在「会话生成产物」列表 */
+  const isUserMediaLikeArtifact = (r: { type?: string; name?: string }) => {
+    if (r.type !== 'artifact') return false
+    return /\.(jpe?g|png|gif|webp|bmp|svg|mp4|mov|webm|avi|mkv|mp3|wav|m4a|zip)$/i.test(r.name || '')
+  }
+  /** 误标为 output 的短文本/空内容图片文件（如聊天附件落库形态） */
+  const isImageLikeNonTextOutput = (r: { type?: string; name?: string; content?: string }) => {
+    if (r.type !== 'output') return false
+    if (!/\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(r.name || '')) return false
+    return (r.content || '').trim().length < 200
+  }
+  /** 右侧 Studio 产物：仅当前会话 + 生成类，并排除用户上传类媒体 */
+  const filteredOutputResources = outputResources.filter((r) => {
+    if (!urlSessionId || r.session_id !== urlSessionId) return false
+    if (detectOutputOrigin(r) !== 'generated') return false
+    if (isUserMediaLikeArtifact(r)) return false
+    if (isImageLikeNonTextOutput(r)) return false
+    return true
   })
   const activeTodoResource = resources.find((r) => r.type === 'todo_state' && r.session_id === urlSessionId)
   const todoItems: Array<{ text: string; done: boolean }> = (() => {
@@ -725,6 +681,25 @@ export default function ProjectDetail() {
       textColor: style.textColor,
     }
   })
+
+  const runStudioTool = async (tool: (typeof studioTools)[number]) => {
+    if (upstreamInputLocked) {
+      addToast('info', upstreamBannerText || '远端未就绪，请稍后再试')
+      return
+    }
+    if (isStreaming) {
+      addToast('info', '当前正在生成中，请稍后再试')
+      return
+    }
+    setActiveStudioTool(tool.id)
+    setIsRightCollapsed(false)
+    if (!tool.prompt?.trim()) {
+      addToast('error', `「${tool.label}」未配置提示词`)
+      return
+    }
+    addToast('info', `正在执行「${tool.label}」`)
+    await handleSendMessage(tool.prompt, 'chat', null, [])
+  }
 
   const resourceTabs = [
     { key: 'documents' as ResourceType, label: '文档', icon: FileText, count: docResources.length },
@@ -1167,9 +1142,9 @@ export default function ProjectDetail() {
         </LeftPane>
 
         {/* ── 中间对话区 ── */}
-        <div className="flex flex-1 flex-col min-w-0 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-          {/* AIChatBox 占满剩余高度（无 session 时显示加载，等待重定向到会话） */}
-          <div className="flex-1 overflow-hidden">
+        <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-visible rounded-xl border border-gray-100 bg-white shadow-sm">
+          {/* AIChatBox 占满剩余高度；允许纵向溢出以便输入区上方的浮层不被裁切 */}
+          <div className="flex flex-1 min-h-0 flex-col overflow-visible">
             {!urlSessionId && id ? (
               <div className="flex-1 flex items-center justify-center">
                 <div className="w-8 h-8 border-2 border-gray-200 border-t-primary-600 rounded-full animate-spin"></div>
@@ -1182,8 +1157,8 @@ export default function ProjectDetail() {
             <AIChatBoxNew
               messages={chatMessages}
               todoItems={chatTodoItems}
-              skills={skills}
-              recommendedSkills={recSkills}
+              studioActions={studioTools}
+              onRunStudioTool={(tool) => void runStudioTool(tool)}
               libraryFiles={libraryFiles}
               upstreamInputLocked={upstreamInputLocked}
               upstreamCanStop={upstreamCanStop}
@@ -1246,24 +1221,7 @@ export default function ProjectDetail() {
                   {studioTools.map(tool => (
                     <button
                       key={tool.id}
-                      onClick={async () => {
-                        if (upstreamInputLocked) {
-                          addToast('info', upstreamBannerText || '远端未就绪，请稍后再试')
-                          return
-                        }
-                        if (isStreaming) {
-                          addToast('info', '当前正在生成中，请稍后再试')
-                          return
-                        }
-                        setActiveStudioTool(tool.id)
-                        setIsRightCollapsed(false)
-                        if (!tool.prompt?.trim()) {
-                          addToast('error', `「${tool.label}」未配置提示词`)
-                          return
-                        }
-                        addToast('info', `正在执行「${tool.label}」`)
-                        await handleSendMessage(tool.prompt, 'chat', null, [])
-                      }}
+                      onClick={() => void runStudioTool(tool)}
                       disabled={isStreaming || upstreamInputLocked}
                       className={cn(
                         'relative flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-left shadow-sm transition-all duration-150',
@@ -1290,57 +1248,7 @@ export default function ProjectDetail() {
               {/* 内容区域：输出列表 + 预览 或 单个资料预览 */}
               <div className="relative flex-1 min-h-0 flex flex-col">
                 <div className="flex-1 border-b border-gray-100 p-3 bg-gray-50/40 overflow-y-auto">
-                  <div className="mb-2 grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => setStudioOutputScope('session')}
-                      className={cn(
-                        'rounded-md px-2 py-1 text-xs font-medium',
-                        studioOutputScope === 'session' ? 'bg-indigo-100 text-indigo-700' : 'bg-white text-gray-500 border border-gray-200'
-                      )}
-                    >
-                      会话级
-                    </button>
-                    <button
-                      onClick={() => setStudioOutputScope('project')}
-                      className={cn(
-                        'rounded-md px-2 py-1 text-xs font-medium',
-                        studioOutputScope === 'project' ? 'bg-indigo-100 text-indigo-700' : 'bg-white text-gray-500 border border-gray-200'
-                      )}
-                    >
-                      项目级
-                    </button>
-                  </div>
-
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setOutputOriginFilter('all')}
-                        className={cn(
-                          'rounded-md px-2 py-1 text-[11px] font-medium',
-                          outputOriginFilter === 'all' ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 border border-gray-200'
-                        )}
-                      >
-                        全部
-                      </button>
-                      <button
-                        onClick={() => setOutputOriginFilter('generated')}
-                        className={cn(
-                          'rounded-md px-2 py-1 text-[11px] font-medium',
-                          outputOriginFilter === 'generated' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 border border-gray-200'
-                        )}
-                      >
-                        生成
-                      </button>
-                      <button
-                        onClick={() => setOutputOriginFilter('uploaded')}
-                        className={cn(
-                          'rounded-md px-2 py-1 text-[11px] font-medium',
-                          outputOriginFilter === 'uploaded' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-500 border border-gray-200'
-                        )}
-                      >
-                        上传
-                      </button>
-                    </div>
                     {filteredOutputResources.map((output) => (
                       <div
                         key={output.id}
@@ -1385,34 +1293,13 @@ export default function ProjectDetail() {
                         <MoreMenu onRename={() => handleRename('output', output.id)} onDelete={() => handleDelete('output', output.id)} />
                       </div>
                     ))}
-                    {filteredOutputResources.length === 0 && (
-                      <div className="rounded-lg border border-dashed border-gray-200 bg-white/80 px-3 py-4 text-center text-xs text-gray-400">
-                        {studioOutputScope === 'session' ? '当前会话暂无匹配产物' : '当前项目暂无匹配产物'}
-                      </div>
-                    )}
+                    
                   </div>
 
-                  <div className="mt-3 border-t border-gray-100 pt-3">
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Todo List</p>
-                    <div className="space-y-1">
-                      {todoItems.length > 0 ? todoItems.map((todo, idx) => (
-                        <div key={`${todo.text}-${idx}`} className="flex items-start gap-2 rounded-md bg-white px-2 py-1.5 text-xs border border-gray-100">
-                          <span className={cn('mt-0.5 h-1.5 w-1.5 rounded-full', todo.done ? 'bg-emerald-500' : 'bg-amber-500')} />
-                          <span className={cn('leading-relaxed', todo.done ? 'text-gray-400 line-through' : 'text-gray-600')}>{todo.text}</span>
-                        </div>
-                      )) : (
-                        <div className="text-xs text-gray-400">暂无会话待办</div>
-                      )}
-                    </div>
-                  </div>
+                   
                 </div>
 
-                {!viewingResource && (
-                  <div className="flex-shrink-0 py-3 text-center text-sm text-gray-400">
-                    点击上方产物查看内容
-                  </div>
-                )}
-
+                
               </div>
               {viewingResource && (
                 <>

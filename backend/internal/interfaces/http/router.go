@@ -1,8 +1,12 @@
 package http
 
 import (
+	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/easyspace-ai/ylmnote/internal/application/auth"
@@ -14,7 +18,6 @@ import (
 	"github.com/easyspace-ai/ylmnote/internal/config"
 	"github.com/easyspace-ai/ylmnote/internal/infrastructure/ai"
 	"github.com/easyspace-ai/ylmnote/internal/infrastructure/persistence"
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	sdkclient "ylmsdk/client"
 	sdkprovider "ylmsdk/provider"
@@ -22,20 +25,24 @@ import (
 
 // Wire 组装路由与依赖（可后续改为 wire/codegen）
 func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
-	r := gin.Default()
-	r.Use(cors.New(cors.Config{
-		AllowAllOrigins: true,
-		AllowMethods:    []string{"*"},
-		AllowHeaders:    []string{"*"},
-	}))
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(RequestLogMiddleware())
+	r.Use(CORSMiddleware(cfg))
 
 	r.GET("/health", Health)
 
+	apiLimiter := newMinuteLimiter(cfg.RateLimitAPIPerMinute)
+	authLimiter := newMinuteLimiter(cfg.RateLimitAuthPerMinute)
+
 	api := r.Group("/api")
+	api.Use(apiLimiter.Middleware())
 	userRepo := persistence.NewUserRepository(db)
 	authSvc := auth.NewService(cfg, userRepo)
 	authHandler := NewAuthHandler(authSvc, cfg)
-	authHandler.RegisterRoutes(api.Group("/auth"))
+	authRoutes := api.Group("/auth")
+	authRoutes.Use(authLimiter.Middleware())
+	authHandler.RegisterRoutes(authRoutes)
 
 	projectRepo := persistence.NewProjectRepository(db)
 	sessionRepo := persistence.NewSessionRepository(db)
@@ -54,11 +61,16 @@ func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
 			ServiceAPIKey: cfg.SDK.ServiceAPIKey,
 			UploadPath:    cfg.SDK.UploadPath,
 			Timeout:       time.Duration(cfg.SDK.TimeoutSec) * time.Second,
+			Debug:         cfg.SDK.Debug,
 		})
 		aiSDK = sdkclient.New(provider, sdkclient.RetryConfig{
 			MaxAttempts: cfg.SDK.RetryMax,
 			BaseDelay:   400 * time.Millisecond,
+			Debug:       cfg.SDK.Debug,
 		})
+		if cfg.SDK.Debug {
+			slog.Info("ai_sdk_debug_enabled")
+		}
 	}
 	projectSvc := project.NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, promptTemplateRepo, aiSDK)
 
@@ -76,9 +88,10 @@ func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
 	promptTemplateGroup.Use(AuthMiddleware(authSvc))
 	promptTemplateHandler.RegisterRoutes(promptTemplateGroup)
 
-	chatSvc := chat.NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, aiSDK, chat.UpstreamSyncConfig{
+	chatSvc := chat.NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, userRepo, cfg.ChatCreditCost, aiSDK, chat.UpstreamSyncConfig{
 		BaseURL:       cfg.SDK.BaseURL,
 		ServiceAPIKey: cfg.SDK.ServiceAPIKey,
+		Debug:         cfg.SDK.Debug,
 	})
 	chatHandler := NewChatHandler(chatSvc)
 	chatGroup := api.Group("/chat")
@@ -103,18 +116,52 @@ func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
 	userHandler.RegisterRoutes(userGroup)
 
 	// 静态文件服务 - 前端集成
+	slog.Info("spa_static_root", slog.String("dir", staticRoot()))
 	r.NoRoute(serveSPA)
 
 	return r
 }
 
+var (
+	staticRootOnce sync.Once
+	staticRootVal  string
+)
+
+// staticRoot 解析 SPA 静态目录：优先 STATIC_DIR；否则若可执行文件同目录下存在 static/ 则用之（适配 make 产物 bin/server + bin/static）；否则为当前工作目录下的 static/（适配 go run / pnpm build 到 backend/static）。
+func staticRoot() string {
+	staticRootOnce.Do(func() {
+		if d := strings.TrimSpace(os.Getenv("STATIC_DIR")); d != "" {
+			staticRootVal = d
+			return
+		}
+		exe, err := os.Executable()
+		if err == nil {
+			if sym, err := filepath.EvalSymlinks(exe); err == nil {
+				exe = sym
+			}
+			candidate := filepath.Join(filepath.Dir(exe), "static")
+			if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+				staticRootVal = candidate
+				return
+			}
+		}
+		staticRootVal = "static"
+	})
+	return staticRootVal
+}
+
 // serveSPA 为 SPA 应用提供前端文件服务
 func serveSPA(c *gin.Context) {
-	path := filepath.Join("static", c.Request.URL.Path)
-	if _, err := http.Dir(".").Open(path); err == nil {
-		c.File(path)
+	root := staticRoot()
+	rel := strings.TrimPrefix(c.Request.URL.Path, "/")
+	candidate := filepath.Join(root, rel)
+	if relPath, err := filepath.Rel(root, candidate); err != nil || strings.HasPrefix(relPath, "..") {
+		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
-	// 回退到 index.html，让前端路由处理
-	c.File("static/index.html")
+	if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+		c.File(candidate)
+		return
+	}
+	c.File(filepath.Join(root, "index.html"))
 }

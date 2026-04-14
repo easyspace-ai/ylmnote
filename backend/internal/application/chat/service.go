@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	neturl "net/url"
@@ -16,26 +17,32 @@ import (
 	"unicode/utf8"
 
 	"github.com/easyspace-ai/ylmnote/internal/domain/project"
+	"github.com/easyspace-ai/ylmnote/internal/domain/user"
 	"github.com/google/uuid"
 	sdkclient "ylmsdk/client"
 	sdktypes "ylmsdk/types"
+	"gorm.io/gorm"
 )
 
 // Service 对话应用服务
 type Service struct {
-	projectRepo     project.ProjectRepository
-	sessionRepo     project.SessionRepository
-	messageRepo     project.MessageRepository
-	resourceRepo    project.ResourceRepository
-	sdkClient       *sdkclient.Client
-	upstreamBaseURL string
-	upstreamAPIKey  string
-	httpClient      *http.Client
+	projectRepo      project.ProjectRepository
+	sessionRepo      project.SessionRepository
+	messageRepo      project.MessageRepository
+	resourceRepo     project.ResourceRepository
+	userRepo         user.Repository
+	chatCreditCost   int
+	sdkClient        *sdkclient.Client
+	upstreamBaseURL  string
+	upstreamAPIKey   string
+	httpClient       *http.Client
+	sdkDebug         bool
 }
 
 type UpstreamSyncConfig struct {
 	BaseURL       string
 	ServiceAPIKey string
+	Debug         bool
 }
 
 var (
@@ -49,6 +56,8 @@ func NewService(
 	sessionRepo project.SessionRepository,
 	messageRepo project.MessageRepository,
 	resourceRepo project.ResourceRepository,
+	userRepo user.Repository,
+	chatCreditCost int,
 	sdkClient *sdkclient.Client,
 	syncCfg UpstreamSyncConfig,
 ) *Service {
@@ -58,11 +67,60 @@ func NewService(
 		sessionRepo:     sessionRepo,
 		messageRepo:     messageRepo,
 		resourceRepo:    resourceRepo,
+		userRepo:        userRepo,
+		chatCreditCost:  chatCreditCost,
 		sdkClient:       sdkClient,
 		upstreamBaseURL: baseURL,
 		upstreamAPIKey:  strings.TrimSpace(syncCfg.ServiceAPIKey),
 		httpClient:      &http.Client{Timeout: 20 * time.Second},
+		sdkDebug:        syncCfg.Debug,
 	}
+}
+
+// isRepoNotFound 兼容 GORM 原生错误与 persistence 层返回的 "not found" 哨兵。
+func isRepoNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return true
+	}
+	return strings.TrimSpace(err.Error()) == "not found"
+}
+
+func (s *Service) preflightChatCredits(userID string) error {
+	if s.chatCreditCost <= 0 || s.userRepo == nil {
+		return nil
+	}
+	u, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		if isRepoNotFound(err) {
+			return fmt.Errorf("登录状态异常，请重新登录")
+		}
+		return err
+	}
+	if u.CreditsBalance < s.chatCreditCost {
+		return user.ErrInsufficientCredits
+	}
+	return nil
+}
+
+func (s *Service) chargeAfterSuccessfulChat(userID, projectID, assistantMsgID string, model *string) {
+	if s.chatCreditCost <= 0 || s.userRepo == nil {
+		return
+	}
+	pid := projectID
+	mid := assistantMsgID
+	if err := s.userRepo.ChargeCredits(userID, s.chatCreditCost, "chat_completion", &pid, &mid, model); err != nil {
+		slog.Error("chat_charge_credits_failed", slog.String("user_id", userID), slog.Any("err", err))
+	}
+}
+
+func (s *Service) sdkLogf(format string, args ...any) {
+	if !s.sdkDebug {
+		return
+	}
+	log.Printf("[sdk-upstream] "+format, args...)
 }
 
 type ResourceRefInput struct {
@@ -95,6 +153,9 @@ type ChatResult struct {
 
 // Chat 必须传入 project_id；可选 session_id。若无 session 则新建会话。消息归属到会话。
 func (s *Service) Chat(ctx context.Context, userID string, in ChatInput) (*ChatResult, error) {
+	if err := s.preflightChatCredits(userID); err != nil {
+		return nil, err
+	}
 	projectID, sessionID, upstreamSessionID, err := s.prepareSessionAndSaveUserMessage(ctx, userID, in)
 	if err != nil {
 		return nil, err
@@ -107,6 +168,8 @@ func (s *Service) Chat(ctx context.Context, userID string, in ChatInput) (*ChatR
 	if err != nil {
 		return nil, err
 	}
+	s.sdkLogf("Chat Send project=%s session=%s upstream=%s model=%q msg_len=%d refs=%d",
+		projectID, sessionID, upstreamSessionID, strOrEmpty(in.Model), len(in.Message), len(refs))
 	assistantResp, err := s.sdkClient.Send(ctx, sdkclient.ChatRequest{
 		SessionID:    upstreamSessionID,
 		Model:        strOrEmpty(in.Model),
@@ -116,6 +179,8 @@ func (s *Service) Chat(ctx context.Context, userID string, in ChatInput) (*ChatR
 	if err != nil {
 		return nil, mapSDKError(err)
 	}
+	s.sdkLogf("Chat Send ok project=%s session=%s resp_upstream=%s content_len=%d",
+		projectID, sessionID, assistantResp.SessionID, len(assistantResp.Content))
 	if err := s.ensureUpstreamSessionBinding(projectID, sessionID, assistantResp.SessionID); err != nil {
 		return nil, err
 	}
@@ -137,6 +202,8 @@ func (s *Service) Chat(ctx context.Context, userID string, in ChatInput) (*ChatR
 		return nil, err
 	}
 
+	s.chargeAfterSuccessfulChat(userID, projectID, assistantMsg.ID, in.Model)
+
 	return &ChatResult{
 		ID:        assistantMsg.ID,
 		ProjectID: projectID,
@@ -149,6 +216,9 @@ func (s *Service) Chat(ctx context.Context, userID string, in ChatInput) (*ChatR
 }
 
 func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEvent func(sdktypes.StreamEvent) error) (*ChatResult, error) {
+	if err := s.preflightChatCredits(userID); err != nil {
+		return nil, err
+	}
 	projectID, sessionID, upstreamSessionID, err := s.prepareSessionAndSaveUserMessage(ctx, userID, in)
 	if err != nil {
 		return nil, err
@@ -161,6 +231,8 @@ func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEve
 	if err != nil {
 		return nil, err
 	}
+	s.sdkLogf("Stream start project=%s session=%s upstream=%s model=%q msg_len=%d refs=%d",
+		projectID, sessionID, upstreamSessionID, strOrEmpty(in.Model), len(in.Message), len(refs))
 	streamCapture := newStreamCapture()
 	assistantDraft := &project.Message{
 		ID:        uuid.NewString(),
@@ -217,6 +289,8 @@ func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEve
 		_ = flushDraft(true)
 		return nil, mapSDKError(err)
 	}
+	s.sdkLogf("Stream done project=%s session=%s resp_upstream=%s content_len=%d",
+		projectID, sessionID, resp.SessionID, len(resp.Content))
 	if err := s.ensureUpstreamSessionBinding(projectID, sessionID, resp.SessionID); err != nil {
 		return nil, err
 	}
@@ -233,6 +307,7 @@ func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEve
 	if err := s.persistStreamCapture(projectID, sessionID, streamCapture); err != nil {
 		log.Printf("[chat-stream] persist stream capture failed project=%s session=%s err=%v", projectID, sessionID, err)
 	}
+	s.chargeAfterSuccessfulChat(userID, projectID, assistantDraft.ID, in.Model)
 	return &ChatResult{
 		ID:        "",
 		ProjectID: projectID,
@@ -267,6 +342,9 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 	}
 	projectID = *in.ProjectID
 	if _, err := s.projectRepo.GetByIDAndUserID(projectID, userID); err != nil {
+		if isRepoNotFound(err) {
+			return "", "", "", fmt.Errorf("项目不存在或无权访问")
+		}
 		return "", "", "", err
 	}
 
@@ -275,6 +353,9 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 	if in.SessionID != nil && *in.SessionID != "" {
 		sess, err := s.sessionRepo.GetByIDAndProjectID(*in.SessionID, projectID)
 		if err != nil {
+			if isRepoNotFound(err) {
+				return "", "", "", fmt.Errorf("会话不存在或已删除，请返回项目页刷新后再试")
+			}
 			return "", "", "", err
 		}
 		sessionID = *in.SessionID
@@ -354,6 +435,11 @@ func (s *Service) resolveResourceRefs(projectID string, in ChatInput) ([]sdktype
 		}
 		loaded, err := s.loadResourceRef(projectID, refID)
 		if err != nil {
+			// 前端可能仍带着已删除资料、或跨项目残留 id；跳过以免整轮对话失败。
+			if isRepoNotFound(err) {
+				slog.Warn("chat_skip_missing_resource_ref", slog.String("project_id", projectID), slog.String("resource_id", refID))
+				continue
+			}
 			return nil, err
 		}
 		out = append(out, loaded)
@@ -608,6 +694,11 @@ func (s *Service) SyncSessionState(ctx context.Context, projectID, sessionID str
 		}
 	}
 	if upstreamSessionID == "" {
+		slog.Info("sync_session_state_skip",
+			slog.String("project_id", projectID),
+			slog.String("local_session_id", sessionID),
+			slog.String("reason", "upstream_unbound"),
+		)
 		return &SyncSessionStateResult{ArtifactCount: 0, TodoCount: 0}, nil
 	}
 	if err := s.refreshSessionMetaFromUpstream(ctx, projectID, sessionID); err != nil {
@@ -638,6 +729,14 @@ func (s *Service) SyncSessionState(ctx context.Context, projectID, sessionID str
 	if err := s.persistTimelineMessages(projectID, sessionID, timelineMessages); err != nil {
 		return nil, err
 	}
+	slog.Info("sync_session_state_done",
+		slog.String("project_id", projectID),
+		slog.String("local_session_id", sessionID),
+		slog.String("upstream_session_id", upstreamSessionID),
+		slog.Int("artifact_count", len(artifacts)),
+		slog.Int("todo_count", len(todos)),
+		slog.Int("timeline_frame_count", len(timelineMessages)),
+	)
 	return &SyncSessionStateResult{
 		ArtifactCount: len(artifacts),
 		TodoCount:     len(todos),
@@ -861,22 +960,30 @@ func isTextualArtifact(name, contentType string) bool {
 }
 
 func (s *Service) fetchUpstreamJSON(ctx context.Context, path string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.upstreamBaseURL+path, nil)
+	fullURL := s.upstreamBaseURL + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("x-w6service-api-key", s.upstreamAPIKey)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		log.Printf("[sdk-upstream] GET %s err=%v", path, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("[sdk-upstream] GET %s status=%d", path, resp.StatusCode)
 		return nil, fmt.Errorf("upstream status %d for %s", resp.StatusCode, path)
 	}
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		log.Printf("[sdk-upstream] GET %s json decode err=%v", path, err)
 		return nil, err
+	}
+	if s.sdkDebug {
+		st := strings.ToLower(strings.TrimSpace(extractUpstreamAgentStatus(out)))
+		log.Printf("[sdk-upstream] GET %s ok inferred_status=%q", path, st)
 	}
 	return out, nil
 }
@@ -1201,8 +1308,10 @@ func mapSDKError(err error) error {
 	}
 	var sdkErr *sdktypes.SDKError
 	if !errors.As(err, &sdkErr) {
+		log.Printf("[sdk-error] non-sdk err=%v", err)
 		return err
 	}
+	log.Printf("[sdk-error] code=%q http_status=%d message=%q cause=%v", sdkErr.Code, sdkErr.StatusCode, sdkErr.Message, sdkErr.Cause)
 	return fmt.Errorf("%s", sdkErr.Error())
 }
 
@@ -1228,10 +1337,25 @@ func (s *Service) ensureUpstreamSessionBinding(projectID, sessionID, upstreamSes
 	case current == "":
 		sess.UpstreamSessionID = &upstreamSessionID
 		sess.UpdatedAt = time.Now().UTC()
-		return s.sessionRepo.Update(sess)
+		if err := s.sessionRepo.Update(sess); err != nil {
+			return err
+		}
+		slog.Info("upstream_session_binding",
+			slog.String("project_id", projectID),
+			slog.String("local_session_id", sessionID),
+			slog.String("upstream_session_id", upstreamSessionID),
+			slog.String("action", "set"),
+		)
+		return nil
 	case current == upstreamSessionID:
 		return nil
 	default:
+		slog.Warn("upstream_session_binding_conflict",
+			slog.String("project_id", projectID),
+			slog.String("local_session_id", sessionID),
+			slog.String("current_upstream_session_id", current),
+			slog.String("incoming_upstream_session_id", upstreamSessionID),
+		)
 		return fmt.Errorf("%w: expected=%s got=%s", ErrUpstreamSessionConflict, current, upstreamSessionID)
 	}
 }
@@ -1276,9 +1400,12 @@ func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessio
 				return "", err
 			}
 		}
+		s.sdkLogf("activate EnsureSession attempt=%d/%d project=%s session=%s hint=%q",
+			attempt, upstreamActivateMaxAttempts, projectID, sessionID, upstreamSessionID)
 		var id string
 		id, ensureErr = s.sdkClient.EnsureSession(ctx, upstreamSessionID)
 		if ensureErr != nil {
+			s.sdkLogf("activate EnsureSession err attempt=%d err=%v", attempt, ensureErr)
 			if attempt == upstreamActivateMaxAttempts {
 				return "", mapSDKError(ensureErr)
 			}
@@ -1286,11 +1413,13 @@ func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessio
 		}
 		ensuredID = strings.TrimSpace(id)
 		if ensuredID == "" {
+			s.sdkLogf("activate EnsureSession empty id attempt=%d", attempt)
 			if attempt == upstreamActivateMaxAttempts {
 				return "", ErrUpstreamSessionUnbound
 			}
 			continue
 		}
+		s.sdkLogf("activate EnsureSession ok upstream=%s", ensuredID)
 		break
 	}
 	if err := s.ensureUpstreamSessionBinding(projectID, sessionID, ensuredID); err != nil {
@@ -1303,10 +1432,13 @@ func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessio
 				return "", err
 			}
 		}
+		s.sdkLogf("activate waitReady attempt=%d/%d upstream=%s", attempt, upstreamActivateMaxAttempts, ensuredID)
 		waitErr = s.waitUpstreamSessionReady(ctx, ensuredID)
 		if waitErr == nil {
+			s.sdkLogf("activate waitReady ok upstream=%s", ensuredID)
 			return ensuredID, nil
 		}
+		s.sdkLogf("activate waitReady err attempt=%d err=%v", attempt, waitErr)
 		if attempt == upstreamActivateMaxAttempts {
 			return "", waitErr
 		}
@@ -1339,6 +1471,9 @@ func (s *Service) waitUpstreamSessionReady(ctx context.Context, upstreamSessionI
 			lastStatus = status
 			switch status {
 			case "idle", "running", "busy", "ready", "normal":
+				return nil
+			// 远端 paused / 等待输入 / 已结束：不阻塞激活，避免一直等到超时
+			case "paused", "waiting", "stopped", "completed", "done":
 				return nil
 			}
 		}
@@ -1428,6 +1563,7 @@ func (s *Service) GetUpstreamGate(ctx context.Context, userID, projectID, sessio
 
 	payload, err := s.fetchUpstreamJSON(ctx, fmt.Sprintf("/api/agents/%s", neturl.PathEscape(up)))
 	if err != nil {
+		log.Printf("[sdk-upstream] upstream-gate offline project=%s session=%s upstream=%s err=%v", projectID, sessionID, up, err)
 		out.Phase = "offline"
 		out.InputLocked = true
 		out.Detail = "无法连接远端状态"
@@ -1437,11 +1573,13 @@ func (s *Service) GetUpstreamGate(ctx context.Context, userID, projectID, sessio
 	status := strings.ToLower(strings.TrimSpace(extractUpstreamAgentStatus(payload)))
 	out.Status = status
 	canSDK := s.sdkClient != nil
+	s.sdkLogf("upstream-gate project=%s session=%s upstream=%s status=%q phase_will_resolve", projectID, sessionID, up, status)
 	switch status {
 	case "":
 		out.Phase = "ready"
 		out.InputLocked = false
-	case "idle", "ready", "normal":
+	// 空闲或等待用户侧操作：允许本地继续输入（paused 等勿落入 default 否则无限「请稍候」）
+	case "idle", "ready", "normal", "paused", "waiting", "stopped", "completed", "done":
 		out.Phase = "ready"
 		out.InputLocked = false
 	case "running", "busy":
@@ -1453,6 +1591,8 @@ func (s *Service) GetUpstreamGate(ctx context.Context, userID, projectID, sessio
 		out.InputLocked = true
 		out.CanStop = false
 	}
+	s.sdkLogf("upstream-gate resolved project=%s session=%s phase=%s input_locked=%v can_stop=%v",
+		projectID, sessionID, out.Phase, out.InputLocked, out.CanStop)
 	return out, nil
 }
 
@@ -1475,7 +1615,13 @@ func (s *Service) StopUpstreamSession(ctx context.Context, userID, projectID, se
 	if s.sdkClient == nil {
 		return ErrUpstreamStopUnavailable
 	}
-	return s.sdkClient.SendStop(ctx, up)
+	s.sdkLogf("StopUpstream project=%s session=%s upstream=%s", projectID, sessionID, up)
+	if stopErr := s.sdkClient.SendStop(ctx, up); stopErr != nil {
+		log.Printf("[sdk-upstream] StopUpstream failed project=%s session=%s upstream=%s err=%v", projectID, sessionID, up, stopErr)
+		return stopErr
+	}
+	s.sdkLogf("StopUpstream ok project=%s session=%s upstream=%s", projectID, sessionID, up)
+	return nil
 }
 
 func (s *Service) refreshSessionMetaFromUpstream(ctx context.Context, projectID, sessionID string) error {

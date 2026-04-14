@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"ylmsdk/types"
@@ -46,6 +47,8 @@ type Provider interface {
 type RetryConfig struct {
 	MaxAttempts int
 	BaseDelay   time.Duration
+	// Debug 为 true 时打印重试与非重试终错（与 AI_SDK_DEBUG / 后端 AISDKConfig.Debug 对齐）
+	Debug bool
 }
 
 type Client struct {
@@ -75,9 +78,16 @@ func (c *Client) Send(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	for attempt := 1; attempt <= c.retry.MaxAttempts; attempt++ {
 		resp, err := c.provider.Send(ctx, req)
 		if err == nil {
+			if c.retry.Debug && attempt > 1 {
+				log.Printf("[sdk-client] Send ok after attempt=%d/%d session=%q", attempt, c.retry.MaxAttempts, req.SessionID)
+			}
 			return resp, nil
 		}
 		lastErr = err
+		if c.retry.Debug {
+			log.Printf("[sdk-client] Send attempt=%d/%d session=%q retryable=%v err=%v",
+				attempt, c.retry.MaxAttempts, req.SessionID, types.IsRetryable(err), err)
+		}
 		if !types.IsRetryable(err) || attempt == c.retry.MaxAttempts {
 			break
 		}
@@ -93,9 +103,16 @@ func (c *Client) Stream(ctx context.Context, req ChatRequest, onEvent func(types
 	for attempt := 1; attempt <= c.retry.MaxAttempts; attempt++ {
 		resp, err := c.provider.Stream(ctx, req, onEvent)
 		if err == nil {
+			if c.retry.Debug && attempt > 1 {
+				log.Printf("[sdk-client] Stream ok after attempt=%d/%d session=%q", attempt, c.retry.MaxAttempts, req.SessionID)
+			}
 			return resp, nil
 		}
 		lastErr = err
+		if c.retry.Debug {
+			log.Printf("[sdk-client] Stream attempt=%d/%d session=%q retryable=%v err=%v",
+				attempt, c.retry.MaxAttempts, req.SessionID, types.IsRetryable(err), err)
+		}
 		if !types.IsRetryable(err) || attempt == c.retry.MaxAttempts {
 			break
 		}
@@ -115,9 +132,16 @@ func (c *Client) Upload(ctx context.Context, req UploadRequest) (*UploadResponse
 	for attempt := 1; attempt <= c.retry.MaxAttempts; attempt++ {
 		resp, err := c.provider.Upload(ctx, req)
 		if err == nil {
+			if c.retry.Debug && attempt > 1 {
+				log.Printf("[sdk-client] Upload ok after attempt=%d/%d file=%q", attempt, c.retry.MaxAttempts, req.FileName)
+			}
 			return resp, nil
 		}
 		lastErr = err
+		if c.retry.Debug {
+			log.Printf("[sdk-client] Upload attempt=%d/%d file=%q retryable=%v err=%v",
+				attempt, c.retry.MaxAttempts, req.FileName, types.IsRetryable(err), err)
+		}
 		if !types.IsRetryable(err) || attempt == c.retry.MaxAttempts {
 			break
 		}

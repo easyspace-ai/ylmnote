@@ -137,7 +137,7 @@ func TestChatInjectsResourceRefs(t *testing.T) {
 	}
 	provider := &testProvider{}
 	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
-	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, sdk, UpstreamSyncConfig{})
+	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, nil, 0, sdk, UpstreamSyncConfig{})
 
 	projectID := "p1"
 	result, err := svc.Chat(context.Background(), "u1", ChatInput{
@@ -176,7 +176,7 @@ func TestGetUpstreamGateUnboundWithSDKUnlocksInput(t *testing.T) {
 	resourceRepo := &testResourceRepo{resources: map[string]*project.Resource{}}
 	provider := &testProvider{}
 	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
-	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, sdk, UpstreamSyncConfig{
+	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, nil, 0, sdk, UpstreamSyncConfig{
 		BaseURL:       "https://upstream.example",
 		ServiceAPIKey: "secret",
 	})
@@ -211,7 +211,7 @@ func TestSyncSessionStateUnboundReturnsEmpty(t *testing.T) {
 	resourceRepo := &testResourceRepo{resources: map[string]*project.Resource{}}
 	provider := &testProvider{}
 	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
-	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, sdk, UpstreamSyncConfig{
+	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, nil, 0, sdk, UpstreamSyncConfig{
 		BaseURL:       "https://upstream.example",
 		ServiceAPIKey: "secret",
 	})
@@ -241,7 +241,7 @@ func TestChatParsesLegacyResourceReference(t *testing.T) {
 	}
 	provider := &testProvider{}
 	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
-	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, sdk, UpstreamSyncConfig{})
+	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, nil, 0, sdk, UpstreamSyncConfig{})
 
 	projectID := "p1"
 	_, err := svc.Chat(context.Background(), "u1", ChatInput{

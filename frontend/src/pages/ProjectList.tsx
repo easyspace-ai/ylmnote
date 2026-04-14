@@ -1,10 +1,12 @@
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { 
   Plus, Clock, MoreVertical, Pencil, Archive, Trash2, Grid, List, 
   Search, FolderOpen, Sparkles, Filter, ArrowUpDown
 } from 'lucide-react'
 import { cn } from '@/utils'
 import { useAppStore } from '@/stores/apiStore'
+import { useProjectsList } from '@/hooks/useProjectsList'
+import { queryClient } from '@/lib/queryClient'
 import { Link, useNavigate } from 'react-router-dom'
 
 type FilterType = 'recent' | 'active' | 'archived'
@@ -70,21 +72,13 @@ function ProjectCardMenu({
 
 export default function ProjectList() {
   const navigate = useNavigate()
-  const {
-    projects,
-    loading,
-    fetchProjects, createProject, updateProject, deleteProject 
-  } = useAppStore()
+  const { createProject, updateProject, deleteProject } = useAppStore()
+  const { data: projects = [], isFetching: loading } = useProjectsList()
   
   const [searchQuery, setSearchQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState<FilterType>('recent')
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [sortBy, setSortBy] = useState<SortBy>('updated')
-  
-  // 初始化
-  useEffect(() => {
-    fetchProjects()
-  }, [])
   
   // 过滤和排序
   const displayProjects = projects
@@ -112,7 +106,7 @@ export default function ProjectList() {
     const newName = prompt('重命名项目:', project.name)
     if (newName && newName !== project.name) {
       await updateProject(id, { name: newName } as any)
-      fetchProjects()
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
     }
   }
 
@@ -120,7 +114,7 @@ export default function ProjectList() {
     try {
       const newStatus = currentStatus === 'archived' ? 'active' : 'archived'
       await updateProject(id, { status: newStatus })
-      fetchProjects()
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
     } catch (e) {
       console.error(e)
     }
@@ -130,7 +124,7 @@ export default function ProjectList() {
     if (window.confirm("确定要删除这个项目吗？")) {
       try {
         await deleteProject(id)
-        fetchProjects()
+        void queryClient.invalidateQueries({ queryKey: ['projects'] })
       } catch (e) {
         console.error(e)
       }
@@ -140,6 +134,7 @@ export default function ProjectList() {
   const handleCreateProject = async () => {
     const project = await createProject({ name: '新项目' })
     if (project) {
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
       navigate(`/boards/${project.id}`)
     }
   }

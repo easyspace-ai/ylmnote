@@ -4,9 +4,9 @@ import {
   Home, ChevronLeft, ChevronRight, Zap, Sparkles,
 } from 'lucide-react'
 import { cn } from '@/utils'
-import { useAppStore } from '@/stores/apiStore'
 import { useAuthStore } from '@/stores/authStore'
-import { useEffect, useState } from 'react'
+import { useProjectsList } from '@/hooks/useProjectsList'
+import { useState } from 'react'
 import { create } from 'zustand'
 import GlobalSearch from '@/components/GlobalSearch'
 
@@ -27,14 +27,10 @@ const navItems = [
 
 export default function Sidebar() {
   const location = useLocation()
-  const { projects, fetchProjects } = useAppStore()
+  const { data: projects = [] } = useProjectsList()
   const { user, logout } = useAuthStore()
   const { sidebarCollapsed, setSidebarCollapsed } = useSidebarStore()
   const [userHovered, setUserHovered] = useState(false)
-
-  useEffect(() => {
-    fetchProjects()
-  }, [fetchProjects])
 
   const toggle = () => setSidebarCollapsed(!sidebarCollapsed)
 

@@ -1,103 +1,17 @@
 import { create } from 'zustand'
-import { projectApi, chatApi, skillApi, promptTemplateApi } from '@/services/api'
-import { 
-  Project as TProject, 
+import { projectApi, skillApi, promptTemplateApi } from '@/services/api'
+import {
+  Project as TProject,
   Message as TMessage,
   Session as TSession,
   Resource,
   Skill as TSkill,
   PromptTemplate as TPromptTemplate
 } from '@/types'
+import type { SessionSyncMeta } from '@/stores/apiStoreTypes'
+import { createChatConversationSlice } from '@/stores/chatConversationSlice'
 
-const SESSION_MESSAGE_CACHE_LIMIT = 20
-const SESSION_MESSAGE_CACHE_VERSION = 1
-
-function getSessionMessageCacheKey(projectId: string, sessionId: string) {
-  return `youmind:session-messages:v${SESSION_MESSAGE_CACHE_VERSION}:${projectId}:${sessionId}`
-}
-
-function readSessionMessageCache(projectId: string, sessionId: string): TMessage[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(getSessionMessageCacheKey(projectId, sessionId))
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed?.messages)) return []
-    return parsed.messages
-      .filter((m: any) => m && m.project_id === projectId && m.session_id === sessionId)
-      .slice(-SESSION_MESSAGE_CACHE_LIMIT)
-  } catch {
-    return []
-  }
-}
-
-function writeSessionMessageCache(projectId: string, sessionId: string, messages: TMessage[]) {
-  if (typeof window === 'undefined') return
-  try {
-    const scoped = messages
-      .filter((m) => m.project_id === projectId && m.session_id === sessionId)
-      .slice(-SESSION_MESSAGE_CACHE_LIMIT)
-    localStorage.setItem(
-      getSessionMessageCacheKey(projectId, sessionId),
-      JSON.stringify({
-        updated_at: Date.now(),
-        messages: scoped,
-      })
-    )
-  } catch {
-    // ignore cache write failures
-  }
-}
-
-// 项目类型
-export interface Project {
-  id: string
-  name: string
-  description?: string
-  cover_image?: string | null
-  status: "active" | "archived" | "deleted"
-  created_at: string
-  updated_at: string
-}
-
-// 消息类型
-export interface Message {
-  id: string
-  project_id: string
-  session_id?: string
-  role: 'user' | 'assistant'
-  content: string
-  skill_id?: string
-  attachments?: any
-  created_at: string
-}
-
-// 技能类型
-export interface Skill {
-  id: string
-  name: string
-  description?: string
-  icon?: string
-  category: string
-  author?: string
-  users_count: number
-  rating: number
-  tags?: string[]
-  is_installed: boolean
-  is_personal: boolean
-  is_recommended: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface SessionSyncMeta {
-  inFlight: boolean
-  lastAttemptAt: number
-  lastFailedAt?: number
-  lastSuccessAt?: number
-  lastError?: string
-  isTerminal?: boolean
-}
+export type { SessionSyncMeta } from '@/stores/apiStoreTypes'
 
 // Store 状态
 interface AppState {
@@ -164,8 +78,12 @@ interface AppState {
     onChunk?: (text: string) => void,
     model?: string,
     mode?: string,
-    resourceRefs?: Array<{ id: string; name?: string; type?: string }>
+    resourceRefs?: Array<{ id: string; name?: string; type?: string }>,
+    /** 可选：与内部 controller 并行中止（例如父组件卸载） */
+    externalAbortSignal?: AbortSignal
   ) => Promise<void>
+  /** 中止当前流式读取（不影响已落库内容）；切换会话或远端 Stop 后应调用 */
+  abortActiveMessageStream: () => void
   sendW6PageFromOutlineStream: (projectId: string, payload: { title: string; outline: string; knowledgePoints?: string }, callbacks?: { onResult?: (resource: any) => void; onError?: (err: string) => void }) => Promise<void>
   syncSessionState: (projectId: string, sessionId: string, options?: { refreshMessages?: boolean; upstreamSessionId?: string }) => Promise<void>
   getSessionSyncMeta: (projectId: string, sessionId: string) => SessionSyncMeta | undefined
@@ -242,7 +160,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   
-  updateProject: async (id: string, data: Partial<Project>) => {
+  updateProject: async (id: string, data: Partial<TProject>) => {
     try {
       set({ loading: true, error: null })
       const updated = await projectApi.update(id, data)
@@ -270,7 +188,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   
-  setCurrentProject: (project: Project | null) => {
+  setCurrentProject: (project: TProject | null) => {
     set({ currentProject: project, messages: [] })
   },
   
@@ -373,155 +291,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  fetchMessagesBySession: async (
-    projectId: string,
-    sessionId: string,
-    options?: { mode?: 'replaceLatest' | 'prependOlder'; limit?: number }
-  ) => {
-    const mode = options?.mode || 'replaceLatest'
-    const pageSize = options?.limit || 20
-    const isActiveSession = () => get().activeMessageSessionId === sessionId
-    const pagination = get().messagePagination[sessionId] || {
-      nextSkip: 0,
-      hasMore: true,
-      loadingOlder: false,
-      pageSize,
-    }
-    if (mode === 'prependOlder' && (pagination.loadingOlder || !pagination.hasMore)) {
-      return
-    }
-    try {
-      if (mode === 'replaceLatest') {
-        const cached = readSessionMessageCache(projectId, sessionId)
-        set({ loading: true, error: null })
-        if (cached.length > 0 && isActiveSession()) {
-          set((state) => ({
-            messages: cached,
-            messagePagination: {
-              ...state.messagePagination,
-              [sessionId]: {
-                nextSkip: cached.length,
-                hasMore: true,
-                loadingOlder: false,
-                pageSize,
-              },
-            },
-          }))
-        }
-      } else {
-        set((state) => ({
-          error: null,
-          messagePagination: {
-            ...state.messagePagination,
-            [sessionId]: { ...pagination, loadingOlder: true },
-          },
-        }))
-      }
-      const skip = mode === 'replaceLatest' ? 0 : pagination.nextSkip
-      const messages = await chatApi.getRemoteMessages({ projectId, sessionId }, { skip, limit: pageSize })
-      if (!isActiveSession()) {
-        return
-      }
-      if (mode === 'replaceLatest') {
-        writeSessionMessageCache(projectId, sessionId, messages)
-        set((state) => ({
-          messages,
-          loading: false,
-          messagePagination: {
-            ...state.messagePagination,
-            [sessionId]: {
-              nextSkip: messages.length,
-              hasMore: messages.length === pageSize,
-              loadingOlder: false,
-              pageSize,
-            },
-          },
-        }))
-        return
-      }
-      let mergedForCache: TMessage[] = []
-      set((state) => {
-        const existingIds = new Set(state.messages.map((m) => m.id))
-        const older = messages.filter((m) => !existingIds.has(m.id))
-        mergedForCache = [...older, ...state.messages]
-        return {
-          messages: mergedForCache,
-          messagePagination: {
-            ...state.messagePagination,
-            [sessionId]: {
-              ...pagination,
-              nextSkip: pagination.nextSkip + messages.length,
-              hasMore: messages.length === pageSize,
-              loadingOlder: false,
-              pageSize,
-            },
-          },
-        }
-      })
-      writeSessionMessageCache(projectId, sessionId, mergedForCache)
-    } catch (error: any) {
-      if (!isActiveSession()) {
-        return
-      }
-      if (mode === 'replaceLatest') {
-        set({ error: error.message, loading: false })
-      } else {
-        set((state) => ({
-          error: error.message,
-          messagePagination: {
-            ...state.messagePagination,
-            [sessionId]: {
-              ...pagination,
-              loadingOlder: false,
-            },
-          },
-        }))
-      }
-    }
-  },
-
-  hydrateSessionMessagesFromCache: (projectId: string, sessionId: string) => {
-    const cached = readSessionMessageCache(projectId, sessionId)
-    set((state) => ({
-      messages: cached,
-      messagePagination: {
-        ...state.messagePagination,
-        [sessionId]: {
-          nextSkip: cached.length,
-          hasMore: true,
-          loadingOlder: false,
-          pageSize: state.messagePagination[sessionId]?.pageSize || 20,
-        },
-      },
-    }))
-  },
-
-  setActiveMessageSession: (sessionId?: string) => {
-    set({ activeMessageSessionId: sessionId })
-  },
-
-  clearSessionMessages: (sessionId?: string) => {
-    if (!sessionId) {
-      set({ messages: [] })
-      return
-    }
-    set((state) => ({
-      messages: [],
-      messagePagination: {
-        ...state.messagePagination,
-        [sessionId]: {
-          nextSkip: 0,
-          hasMore: true,
-          loadingOlder: false,
-          pageSize: state.messagePagination[sessionId]?.pageSize || 20,
-        },
-      },
-    }))
-  },
-
-  loadOlderMessages: async (projectId: string, sessionId: string) => {
-    await get().fetchMessagesBySession(projectId, sessionId, { mode: 'prependOlder' })
-  },
+  ...createChatConversationSlice(set, get),
 
   createSession: async (projectId: string, title?: string) => {
     const session = await projectApi.createSession(projectId, title ? { title } : undefined)
@@ -546,321 +316,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteSession: async (projectId: string, sessionId: string) => {
     await projectApi.deleteSession(projectId, sessionId)
     set(state => ({ sessions: state.sessions.filter(s => s.id !== sessionId) }))
-  },
-
-  sendMessage: async (projectId: string, content: string, skillId?: string) => {
-    try {
-      set({ loading: true, error: null })
-      
-      // 添加用户消息
-      const userMsg = {
-        id: 'temp-' + Date.now(),
-        project_id: projectId,
-        role: 'user' as const,
-        content,
-        skill_id: skillId,
-        created_at: new Date().toISOString()
-      }
-      set(state => ({ messages: [...state.messages, userMsg] }))
-      
-      // 获取 AI 回复
-      const response = await chatApi.send({
-        message: content,
-        projectId,
-        skillId
-      })
-      
-      // 添加 AI 消息
-      set(state => ({ 
-        messages: [...state.messages, response],
-        loading: false 
-      }))
-    } catch (error: any) {
-      set({ error: error.message, loading: false })
-    }
-  },
-  
-  sendMessageStream: async (
-    projectId: string,
-    sessionId: string | undefined,
-    content: string,
-    skillId?: string,
-    onChunk?: (text: string) => void,
-    model?: string,
-    mode?: string,
-    resourceRefs?: Array<{ id: string; name?: string; type?: string }>
-  ) => {
-    set({ isStreaming: true })
-    let resolvedSessionId = sessionId
-    const persistCache = () => {
-      const sid = resolvedSessionId || sessionId
-      if (!sid) return
-      writeSessionMessageCache(projectId, sid, get().messages)
-    }
-    const todoSessionKey = () => resolvedSessionId || sessionId || `${projectId}:pending`
-    const userMsg = {
-      id: 'temp-' + Date.now(),
-      project_id: projectId,
-      session_id: sessionId,
-      role: 'user' as const,
-      content,
-      skill_id: skillId,
-      created_at: new Date().toISOString()
-    }
-    set(state => ({ messages: [...state.messages, userMsg] }))
-    persistCache()
-
-    const aiMsgId = 'ai-' + Date.now()
-    const aiMsg = {
-      id: aiMsgId,
-      project_id: projectId,
-      session_id: sessionId,
-      role: 'assistant' as const,
-      content: '',
-      created_at: new Date().toISOString()
-    }
-    set(state => ({ messages: [...state.messages, aiMsg] }))
-    persistCache()
-
-    let fullContent = ''
-    try {
-      for await (const chunkEvent of chatApi.stream({ message: content, projectId, sessionId, skillId, model, mode, resourceRefs }) as any) {
-        if (chunkEvent.type === 'session_id' && chunkEvent.value) {
-          const prevKey = todoSessionKey()
-          resolvedSessionId = chunkEvent.value
-          set(state => ({
-            messages: state.messages.map(m =>
-              m.id === aiMsgId ? { ...m, session_id: chunkEvent.value } : m
-            ),
-            liveTodosBySession: (() => {
-              const next = { ...state.liveTodosBySession }
-              const nextKey = todoSessionKey()
-              if (prevKey !== nextKey && next[prevKey] && !next[nextKey]) {
-                next[nextKey] = next[prevKey]
-                delete next[prevKey]
-              }
-              return next
-            })(),
-          }))
-          persistCache()
-          continue
-        } else if (chunkEvent.type === 'tool') {
-          let toolPayload: any = null
-          try {
-            toolPayload = typeof chunkEvent.value === 'string' ? JSON.parse(chunkEvent.value) : chunkEvent.value
-          } catch {
-            toolPayload = null
-          }
-          if (toolPayload?.kind === 'todos' && Array.isArray(toolPayload.todos)) {
-            const todos = toolPayload.todos
-              .map((item: any) => ({
-                text: String(item?.text || '').trim(),
-                done: Boolean(item?.done),
-              }))
-              .filter((item: { text: string }) => item.text)
-            const key = todoSessionKey()
-            set(state => ({
-              liveTodosBySession: {
-                ...state.liveTodosBySession,
-                [key]: todos,
-              },
-            }))
-          }
-          continue
-        } else if (chunkEvent.type === 'status') {
-          set(state => ({
-            messages: state.messages.map(m => 
-              m.id === aiMsgId ? { ...m, status: chunkEvent.value } : m
-            )
-          }))
-          continue
-        } else if (chunkEvent.type === 'status_clear') {
-          set(state => ({
-            messages: state.messages.map(m => 
-              m.id === aiMsgId ? { ...m, status: undefined } : m
-            )
-          }))
-          continue
-        }
-
-        const chunkText = chunkEvent.value || ''
-        fullContent += chunkText
-        
-        set(state => ({
-          messages: state.messages.map(m => 
-            m.id === aiMsgId ? { ...m, content: fullContent } : m
-          )
-        }))
-        persistCache()
-        
-        onChunk?.(chunkText)
-      }
-      // 流式结束后刷新会话列表，使后端自动生成的会话标题出现在侧栏
-      set({ isStreaming: false })
-      await get().fetchSessions(projectId)
-    } catch (error: any) {
-      // 如果后端还没实现 /chat/stream（HTTP 501），自动退回非流式接口，至少保证有完整回复
-      if (String(error?.message || '').includes('501')) {
-        try {
-          const resp = await chatApi.send({ message: content, projectId, sessionId, skillId, model, mode, resourceRefs })
-          fullContent = resp.content || ''
-          set(state => ({
-            isStreaming: false,
-            messages: state.messages.map(m =>
-              m.id === aiMsgId ? { ...m, content: fullContent } : m
-            ),
-          }))
-          persistCache()
-        } catch (e: any) {
-          set({ isStreaming: false, error: e?.message || '发送失败' })
-        }
-      } else {
-        set({ isStreaming: false, error: error.message })
-      }
-    }
-
-    // 刷新后以数据库为准，避免仅靠本地内存/缓存导致跨端不一致。
-    if (projectId && resolvedSessionId) {
-      await get().syncSessionState(projectId, resolvedSessionId, { refreshMessages: true })
-    } else if (projectId) {
-      await get().fetchResources(projectId)
-    }
-  },
-
-  sendW6PageFromOutlineStream: async (projectId, payload, callbacks = {}) => {
-    const { onResult, onError } = callbacks
-    const userMsg = {
-      id: 'temp-' + Date.now(),
-      project_id: projectId,
-      role: 'user' as const,
-      content: payload.outline || payload.title,
-      created_at: new Date().toISOString(),
-    }
-    set(state => ({ messages: [...state.messages, userMsg] }))
-    const aiMsgId = 'w6-' + Date.now()
-    const aiMsg = {
-      id: aiMsgId,
-      project_id: projectId,
-      role: 'assistant' as const,
-      content: '',
-      created_at: new Date().toISOString(),
-    }
-    set(state => ({ messages: [...state.messages, aiMsg] }))
-    const steps: string[] = []
-    await projectApi.generatePageFromOutlineStream(
-      projectId,
-      { title: payload.title, outline: payload.outline, knowledgePoints: payload.knowledgePoints },
-      {
-        onProgress: (_step, message) => {
-          steps.push(message)
-          set(state => ({
-            messages: state.messages.map(m =>
-              m.id === aiMsgId ? { ...m, content: '正在生成动态讲义…\n\n' + steps.join('\n') } : m
-            ),
-          }))
-        },
-        onResult: (resource) => {
-          set(state => ({
-            messages: state.messages.map(m =>
-              m.id === aiMsgId ? { ...m, content: '动态讲义已生成，请查看右侧「输出内容」。' } : m
-            ),
-          }))
-          get().fetchResources(projectId)
-          onResult?.(resource)
-        },
-        onError: (detail) => {
-          set(state => ({
-            messages: state.messages.map(m =>
-              m.id === aiMsgId ? { ...m, content: '生成失败：' + detail } : m
-            ),
-          }))
-          onError?.(detail)
-        },
-      }
-    )
-  },
-
-  syncSessionState: async (projectId: string, sessionId: string, options?: { refreshMessages?: boolean; upstreamSessionId?: string }) => {
-    const syncKey = `${projectId}:${sessionId}`
-    const now = Date.now()
-    const meta = get().sessionSyncMeta[syncKey]
-    // 同会话防重入：避免多个 effect/定时器并发打同一个 sync-state 请求。
-    if (meta?.inFlight) {
-      return
-    }
-    if (meta?.isTerminal) {
-      return
-    }
-    // 连续失败冷却：远端异常时先降频，避免网络面板刷屏。
-    if (meta?.lastFailedAt && now-meta.lastFailedAt < 30_000) {
-      return
-    }
-    set((state) => ({
-      sessionSyncMeta: {
-        ...state.sessionSyncMeta,
-        [syncKey]: {
-          inFlight: true,
-          lastAttemptAt: now,
-          lastFailedAt: meta?.lastFailedAt,
-          lastSuccessAt: meta?.lastSuccessAt,
-          lastError: undefined,
-          isTerminal: false,
-        },
-      },
-    }))
-    try {
-      await chatApi.syncState({ projectId, sessionId, upstreamSessionId: options?.upstreamSessionId })
-      await get().fetchSessions(projectId)
-      await get().fetchResources(projectId)
-      if (options?.refreshMessages) {
-        await get().fetchMessagesBySession(projectId, sessionId)
-      }
-      set((state) => ({
-        sessionSyncMeta: {
-          ...state.sessionSyncMeta,
-          [syncKey]: {
-            inFlight: false,
-            lastAttemptAt: now,
-            lastSuccessAt: Date.now(),
-            lastError: undefined,
-            isTerminal: false,
-          },
-        },
-      }))
-    } catch (error: any) {
-      // 会话同步失败不应阻断主流程（例如远端会话已过期）
-      console.warn('sync session state failed:', error?.message || error)
-      const msg = String(error?.message || '').toLowerCase()
-      // Do not treat "unbound" as terminal: new sessions are unbound until first chat allocates upstream.
-      const isTerminal = msg.includes('session upstream id conflict')
-      set((state) => ({
-        error: isTerminal ? (error?.message || '会话绑定异常，请重新绑定后再试') : state.error,
-        sessionSyncMeta: {
-          ...state.sessionSyncMeta,
-          [syncKey]: {
-            inFlight: false,
-            lastAttemptAt: now,
-            lastFailedAt: Date.now(),
-            lastSuccessAt: meta?.lastSuccessAt,
-            lastError: error?.message || 'sync failed',
-            isTerminal,
-          },
-        },
-      }))
-    }
-  },
-
-  getSessionSyncMeta: (projectId: string, sessionId: string) => {
-    return get().sessionSyncMeta[`${projectId}:${sessionId}`]
-  },
-
-  getSessionSyncStatus: (projectId: string, sessionId: string) => {
-    const meta = get().sessionSyncMeta[`${projectId}:${sessionId}`]
-    if (!meta) return 'idle'
-    if (meta.inFlight) return 'syncing'
-    if (meta.lastFailedAt && Date.now() - meta.lastFailedAt < 30_000) return 'cooldown'
-    if (meta.lastError) return 'error'
-    return 'ready'
   },
 
   // 技能操作
@@ -901,7 +356,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         skills: state.skills.map(s => 
           s.id === id ? { ...s, is_installed: true, users_count: s.users_count + 1 } : s
         ),
-        installedSkills: [...state.installedSkills, state.skills.find(s => s.id === id)].filter(Boolean) as Skill[],
+        installedSkills: [...state.installedSkills, state.skills.find(s => s.id === id)].filter(Boolean) as TSkill[],
         recommendedSkills: state.recommendedSkills.map(s =>
           s.id === id ? { ...s, is_installed: true, users_count: s.users_count + 1 } : s
         )

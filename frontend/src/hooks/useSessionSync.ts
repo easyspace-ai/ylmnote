@@ -1,13 +1,5 @@
 import { useEffect, useRef } from 'react'
-
-interface SessionSyncMeta {
-  inFlight: boolean
-  lastAttemptAt: number
-  lastFailedAt?: number
-  lastSuccessAt?: number
-  lastError?: string
-  isTerminal?: boolean
-}
+import type { SessionSyncMeta } from '@/stores/apiStoreTypes'
 
 interface UseSessionSyncOptions {
   projectId?: string
@@ -15,6 +7,8 @@ interface UseSessionSyncOptions {
   intervalMs?: number
   enabled?: boolean
   refreshMessages?: boolean
+  /** 为 true 时不在挂载时立即 sync（由页面在资源就绪后主动 sync 一次，避免与 inFlight 短路竞态） */
+  skipInitialSync?: boolean
   syncSessionState: (projectId: string, sessionId: string, options?: { refreshMessages?: boolean }) => Promise<void>
   sessionSyncMeta?: SessionSyncMeta
 }
@@ -25,6 +19,7 @@ export function useSessionSync({
   intervalMs = 45_000,
   enabled = true,
   refreshMessages = true,
+  skipInitialSync = false,
   syncSessionState,
   sessionSyncMeta,
 }: UseSessionSyncOptions) {
@@ -48,8 +43,9 @@ export function useSessionSync({
       await syncSessionState(projectId, sessionId, { refreshMessages })
     }
 
-    // first mount for current session
-    runSync()
+    if (!skipInitialSync) {
+      void runSync()
+    }
     mountedRef.current = true
 
     const timer = window.setInterval(() => {
@@ -66,6 +62,7 @@ export function useSessionSync({
     intervalMs,
     projectId,
     refreshMessages,
+    skipInitialSync,
     sessionId,
     syncSessionState,
   ])

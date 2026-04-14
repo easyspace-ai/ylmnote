@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Sparkles, FileText, BookOpen, FileEdit, Lightbulb, Check } from 'lucide-react'
 import { cn } from '@/utils'
 import { useAppStore } from '@/stores/apiStore'
+import { queryClient } from '@/lib/queryClient'
 
 const templates = [
   { 
@@ -65,6 +66,7 @@ export default function NewProject() {
         name: formData.name,
         description: formData.description,
       })
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
       navigate(`/boards/${project.id}`)
     } catch (e) {
       console.error('Failed to create project', e)

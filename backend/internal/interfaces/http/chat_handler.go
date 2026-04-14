@@ -3,12 +3,13 @@ package http
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/easyspace-ai/ylmnote/internal/application/chat"
+	"github.com/easyspace-ai/ylmnote/internal/domain/user"
 	"github.com/gin-gonic/gin"
 	sdkclient "ylmsdk/client"
 	sdkstream "ylmsdk/stream"
@@ -77,6 +78,10 @@ func (h *ChatHandler) chat(c *gin.Context) {
 		Model:        req.Model,
 	})
 	if err != nil {
+		if errors.Is(err, user.ErrInsufficientCredits) {
+			c.JSON(http.StatusPaymentRequired, gin.H{"detail": "insufficient credits", "code": "insufficient_credits"})
+			return
+		}
 		if errors.Is(err, chat.ErrUpstreamSessionConflict) {
 			c.JSON(http.StatusConflict, gin.H{"detail": err.Error()})
 			return
@@ -116,8 +121,13 @@ func (h *ChatHandler) chatStream(c *gin.Context) {
 		return
 	}
 	start := time.Now()
-	log.Printf("[chat-stream] start user=%s project=%s session=%v msg_len=%d refs=%d",
-		u.ID, *req.ProjectID, req.SessionID, len(req.Message), len(req.ResourceRefs))
+	slog.InfoContext(c.Request.Context(), "chat_stream_start",
+		slog.String("user_id", u.ID),
+		slog.String("project_id", *req.ProjectID),
+		slog.Any("session_id", req.SessionID),
+		slog.Int("message_len", len(req.Message)),
+		slog.Int("resource_refs", len(req.ResourceRefs)),
+	)
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
@@ -145,6 +155,13 @@ func (h *ChatHandler) chatStream(c *gin.Context) {
 		return sdkstream.WriteEvent(c.Writer, evt)
 	})
 	if err != nil {
+		if errors.Is(err, user.ErrInsufficientCredits) {
+			_ = sdkstream.WriteEvent(c.Writer, sdktypes.StreamEvent{
+				Type:  sdktypes.StreamEventError,
+				Value: "insufficient credits",
+			})
+			return
+		}
 		if errors.Is(err, chat.ErrUpstreamSessionConflict) {
 			_ = sdkstream.WriteEvent(c.Writer, sdktypes.StreamEvent{
 				Type:  sdktypes.StreamEventError,
@@ -159,8 +176,14 @@ func (h *ChatHandler) chatStream(c *gin.Context) {
 			})
 			return
 		}
-		log.Printf("[chat-stream] error user=%s project=%s session=%v after=%s events=%d err=%v",
-			u.ID, *req.ProjectID, req.SessionID, time.Since(start).Truncate(time.Millisecond), eventCount, err)
+		slog.ErrorContext(c.Request.Context(), "chat_stream_error",
+			slog.String("user_id", u.ID),
+			slog.String("project_id", *req.ProjectID),
+			slog.Any("session_id", req.SessionID),
+			slog.String("after", time.Since(start).Truncate(time.Millisecond).String()),
+			slog.Int("events", eventCount),
+			slog.Any("err", err),
+		)
 		_ = sdkstream.WriteEvent(c.Writer, sdktypes.StreamEvent{
 			Type:  sdktypes.StreamEventError,
 			Value: "ai error: " + err.Error(),
@@ -179,8 +202,14 @@ func (h *ChatHandler) chatStream(c *gin.Context) {
 		Type:  sdktypes.StreamEventStatus,
 		Value: fmt.Sprintf("session:%s", result.SessionID),
 	})
-	log.Printf("[chat-stream] done user=%s project=%s session=%s after=%s events=%d content_len=%d",
-		u.ID, result.ProjectID, result.SessionID, time.Since(start).Truncate(time.Millisecond), eventCount, len(result.Content))
+	slog.InfoContext(c.Request.Context(), "chat_stream_done",
+		slog.String("user_id", u.ID),
+		slog.String("project_id", result.ProjectID),
+		slog.String("session_id", result.SessionID),
+		slog.String("after", time.Since(start).Truncate(time.Millisecond).String()),
+		slog.Int("events", eventCount),
+		slog.Int("content_len", len(result.Content)),
+	)
 }
 
 func (h *ChatHandler) syncState(c *gin.Context) {
@@ -201,7 +230,12 @@ func (h *ChatHandler) syncState(c *gin.Context) {
 
 	result, err := h.svc.SyncSessionState(c.Request.Context(), req.ProjectID, req.SessionID, req.UpstreamSessionID)
 	if err != nil {
-		log.Printf("[chat-sync-state] user=%s project=%s session=%s err=%v", u.ID, req.ProjectID, req.SessionID, err)
+		slog.ErrorContext(c.Request.Context(), "chat_sync_state_error",
+			slog.String("user_id", u.ID),
+			slog.String("project_id", req.ProjectID),
+			slog.String("session_id", req.SessionID),
+			slog.Any("err", err),
+		)
 		if errors.Is(err, chat.ErrUpstreamSessionConflict) {
 			c.JSON(http.StatusConflict, gin.H{"detail": err.Error()})
 			return
@@ -264,7 +298,12 @@ func (h *ChatHandler) upstreamStop(c *gin.Context) {
 			c.JSON(http.StatusNotImplemented, gin.H{"detail": "upstream stop not supported in this deployment"})
 			return
 		}
-		log.Printf("[chat-upstream-stop] user=%s project=%s session=%s err=%v", u.ID, req.ProjectID, req.SessionID, err)
+		slog.ErrorContext(c.Request.Context(), "chat_upstream_stop_error",
+			slog.String("user_id", u.ID),
+			slog.String("project_id", req.ProjectID),
+			slog.String("session_id", req.SessionID),
+			slog.Any("err", err),
+		)
 		c.JSON(http.StatusBadGateway, gin.H{"detail": "upstream stop failed"})
 		return
 	}

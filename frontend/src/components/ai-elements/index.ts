@@ -26,6 +26,8 @@ export { StreamingIndicator } from './StreamingIndicator'
 export { ModeSelector } from './ModeSelector'
 export { ModelSelector } from './ModelSelector'
 export { SkillSelector } from './SkillSelector'
+export { StudioActionsPopover } from './StudioActionsPopover'
+export { ResourcePickerPopover } from './ResourcePickerPopover'
 
 // 导出类型
 export type {
@@ -40,4 +42,5 @@ export type {
   Skill,
   Attachment,
   ModelOption,
+  StudioAction,
 } from './types'

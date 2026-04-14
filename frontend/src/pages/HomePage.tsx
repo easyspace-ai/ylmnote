@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Sparkles, ArrowRight, FileText, Search, Wand2, Code } from 'lucide-react'
 import { cn } from '@/utils'
 import { useAppStore } from '@/stores/apiStore'
+import { queryClient } from '@/lib/queryClient'
 
 const quickSkills = [
   { id: '1', name: '智能写作', icon: FileText,  color: 'from-orange-400 to-amber-500' },
@@ -59,6 +60,7 @@ export default function HomePage() {
       const project = await useAppStore.getState().createProject({
         name: inputValue.substring(0, 30) || '新项目',
       })
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
       navigate(`/boards/${project.id}`, {
         state: { initialMessage: inputValue, startChat: true },
       })
@@ -85,6 +87,7 @@ export default function HomePage() {
          const project = await useAppStore.getState().createProject({
            name: text.substring(0, 30) || '新项目',
          })
+         void queryClient.invalidateQueries({ queryKey: ['projects'] })
          navigate(`/boards/${project.id}`, {
            state: { initialMessage: text, startChat: true },
          })

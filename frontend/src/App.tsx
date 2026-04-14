@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import MainLayout from '@/components/layout/MainLayout'
 import HomePage from '@/pages/HomePage'
 import SearchPage from '@/pages/SearchPage'
@@ -31,6 +32,7 @@ function App() {
   return (
         <ToastProvider>
     <Router>
+      <ErrorBoundary>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
@@ -69,6 +71,7 @@ function App() {
           </ProtectedRoute>
         } />
       </Routes>
+      </ErrorBoundary>
     </Router>
     </ToastProvider>
   )

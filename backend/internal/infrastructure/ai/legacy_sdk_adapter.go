@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"log"
 
 	sdkclient "ylmsdk/client"
 	sdktypes "ylmsdk/types"
@@ -22,6 +23,7 @@ func (a *LegacySDKAdapter) EnsureSession(_ context.Context, sessionID string) (s
 func (a *LegacySDKAdapter) Send(ctx context.Context, req sdkclient.ChatRequest) (*sdkclient.ChatResponse, error) {
 	reply, err := a.client.Chat(ctx, req.UserMessage, strPtrOrNil(req.Model))
 	if err != nil {
+		log.Printf("[sdk-legacy] Chat failed model=%v err=%v", req.Model, err)
 		return nil, &sdktypes.SDKError{Code: sdktypes.ErrTransport, Message: "legacy ai client call failed", Cause: err}
 	}
 	return &sdkclient.ChatResponse{

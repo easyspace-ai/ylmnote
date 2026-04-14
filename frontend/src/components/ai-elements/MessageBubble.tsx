@@ -1,14 +1,15 @@
 /**
- * MessageBubble - 消息气泡组件
+ * MessageBubble - 消息气泡组件（重构版）
  *
  * 支持用户消息和 AI 消息，包含操作按钮和状态显示
+ * 优化配色方案和视觉层次
  */
 
 import { useState, useCallback } from 'react'
 import { cn } from '@/utils'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import type { ChatMessage, MessageStatus } from './types'
-import { Check, Copy, FileText, RefreshCw } from 'lucide-react'
+import { Check, Copy, FileText, RefreshCw, User, Bot } from 'lucide-react'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -27,35 +28,44 @@ function StatusIndicator({ status }: { status?: MessageStatus }) {
   const statusConfig = {
     streaming: {
       text: '生成中...',
-      className: 'text-indigo-500',
+      className: 'text-indigo-600',
+      bgClass: 'bg-indigo-50',
+      borderClass: 'border-indigo-200',
     },
     thinking: {
       text: '思考中...',
-      className: 'text-amber-500',
+      className: 'text-amber-600',
+      bgClass: 'bg-amber-50',
+      borderClass: 'border-amber-200',
     },
     'tool-calling': {
       text: '调用工具...',
-      className: 'text-emerald-500',
+      className: 'text-emerald-600',
+      bgClass: 'bg-emerald-50',
+      borderClass: 'border-emerald-200',
     },
     error: {
       text: '出错了',
-      className: 'text-red-500',
+      className: 'text-red-600',
+      bgClass: 'bg-red-50',
+      borderClass: 'border-red-200',
     },
   }
 
   const config = statusConfig[status]
 
   return (
-    <div className="flex items-center gap-2 text-xs mb-2 pb-2 border-b border-gray-100/50">
-      <div
-        className={cn(
-          'w-3.5 h-3.5 rounded-full border-2 border-t-transparent animate-spin',
-          status === 'thinking' && 'border-amber-400',
-          status === 'streaming' && 'border-indigo-400',
-          status === 'tool-calling' && 'border-emerald-400'
-        )}
-        style={{ borderColor: status === 'error' ? 'transparent' : undefined }}
-      />
+    <div className={cn(
+      'flex items-center gap-2 text-xs mb-2.5 pb-2.5 border-b',
+      config.borderClass
+    )}>
+      <div className={cn(
+        'w-2 h-2 rounded-full animate-pulse',
+        status === 'thinking' && 'bg-amber-400',
+        status === 'streaming' && 'bg-indigo-400',
+        status === 'tool-calling' && 'bg-emerald-400',
+        status === 'error' && 'bg-red-400'
+      )} />
       <span className={cn('font-medium', config.className)}>{config.text}</span>
     </div>
   )
@@ -82,18 +92,23 @@ function MessageActions({
   }, [content, onCopy])
 
   return (
-    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 pl-1">
+    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pl-1">
       <button
         onClick={handleCopy}
-        className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+        className={cn(
+          'flex items-center gap-1 px-2 py-1 text-[11px] rounded-md transition-colors',
+          copied
+            ? 'text-emerald-600 bg-emerald-50'
+            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+        )}
       >
-        {copied ? <Check size={10} className="text-emerald-500" /> : <Copy size={10} />}
+        {copied ? <Check size={10} /> : <Copy size={10} />}
         <span>{copied ? '已复制' : '复制'}</span>
       </button>
 
       <button
         onClick={() => onSaveAsDocument?.(content)}
-        className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+        className="flex items-center gap-1 px-2 py-1 text-[11px] text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
       >
         <FileText size={10} />
         <span>保存</span>
@@ -101,7 +116,7 @@ function MessageActions({
 
       <button
         onClick={() => onRegenerate?.()}
-        className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+        className="flex items-center gap-1 px-2 py-1 text-[11px] text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
       >
         <RefreshCw size={10} />
         <span>重试</span>
@@ -118,33 +133,42 @@ export function MessageBubble({
   className,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
-  const isProcess =
-    !isUser && (message.messageKind === 'reasoning' || message.messageKind === 'system')
 
   return (
-    <div className={cn('group flex gap-2', isUser ? 'justify-end' : 'justify-start', className)}>
-      <div
-        className={cn(
-          'flex flex-col gap-0.5',
-          isUser ? 'items-end max-w-[78%]' : 'items-start max-w-[85%]'
-        )}
-      >
-        {/* 消息气泡 */}
+    <div className={cn('group flex gap-3', isUser ? 'justify-end' : 'justify-start', className)}>
+      {/* AI 头像 */}
+      {!isUser && (
+        <div className={cn(
+          'flex-shrink-0 w-7 h-7 rounded-lg',
+          'bg-gradient-to-br from-indigo-500 to-violet-600',
+          'flex items-center justify-center shadow-sm'
+        )}>
+          <Bot size={14} className="text-white" />
+        </div>
+      )}
+
+      <div className={cn(
+        'flex flex-col gap-0.5',
+        isUser ? 'items-end max-w-[78%]' : 'items-start max-w-[85%]'
+      )}>
+        {/* 消息气泡 - 重新设计配色 */}
         <div
           className={cn(
-            'px-3 py-2 text-[14px]',
+            'px-4 py-2.5 text-[14px] leading-relaxed',
             isUser
-              ? 'bg-gray-900 text-white rounded-[18px] rounded-tr-md'
-              : isProcess
-                ? 'bg-amber-50/70 border border-amber-100 text-gray-700 rounded-[18px] rounded-tl-md max-w-none'
-                : 'bg-gray-50 text-gray-800 rounded-[18px] rounded-tl-md max-w-none'
+              ? // 用户消息 - 深色渐变，现代感
+                'bg-gradient-to-br from-slate-800 to-slate-900 text-white rounded-2xl rounded-tr-md shadow-sm'
+              : // AI 消息 - 浅色背景，精致边框
+                'bg-white border border-slate-200/80 text-slate-800 rounded-2xl rounded-tl-md shadow-sm shadow-slate-900/3'
           )}
         >
           {isUser ? (
-            <div className="w-full text-white user-markdown">
+            // 用户消息内容
+            <div className="w-full">
               <MarkdownRenderer content={message.content} />
             </div>
           ) : (
+            // AI 消息内容
             <>
               <StatusIndicator status={message.status} />
               {message.content ? (
@@ -154,15 +178,9 @@ export function MessageBubble({
               ) : (
                 !message.status && (
                   <div className="h-4 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce" />
-                    <span
-                      className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce"
-                      style={{ animationDelay: '100ms' }}
-                    />
-                    <span
-                      className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce"
-                      style={{ animationDelay: '200ms' }}
-                    />
+                    <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
+                    <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:100ms]" />
+                    <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:200ms]" />
                   </div>
                 )
               )}
@@ -180,6 +198,17 @@ export function MessageBubble({
           />
         )}
       </div>
+
+      {/* 用户头像（可选，保持简洁可省略） */}
+      {isUser && (
+        <div className={cn(
+          'flex-shrink-0 w-7 h-7 rounded-lg',
+          'bg-gradient-to-br from-slate-400 to-slate-500',
+          'flex items-center justify-center shadow-sm'
+        )}>
+          <User size={14} className="text-white" />
+        </div>
+      )}
     </div>
   )
 }
