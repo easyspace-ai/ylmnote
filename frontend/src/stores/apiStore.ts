@@ -831,7 +831,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 会话同步失败不应阻断主流程（例如远端会话已过期）
       console.warn('sync session state failed:', error?.message || error)
       const msg = String(error?.message || '').toLowerCase()
-      const isTerminal = msg.includes('upstream session id is not bound yet') || msg.includes('session upstream id conflict')
+      // Do not treat "unbound" as terminal: new sessions are unbound until first chat allocates upstream.
+      const isTerminal = msg.includes('session upstream id conflict')
       set((state) => ({
         error: isTerminal ? (error?.message || '会话绑定异常，请重新绑定后再试') : state.error,
         sessionSyncMeta: {

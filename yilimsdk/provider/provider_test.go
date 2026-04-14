@@ -1,4 +1,4 @@
-package youmind
+package provider
 
 import (
 	"context"

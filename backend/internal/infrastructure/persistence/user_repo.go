@@ -42,6 +42,14 @@ func (r *UserRepository) GetByEmail(email string) (*user.User, error) {
 	return toUserEntity(&m), nil
 }
 
+func (r *UserRepository) GetByUsernameOrEmail(value string) (*user.User, error) {
+	var m UserModel
+	if err := r.db.Where("username = ? OR email = ?", value, value).First(&m).Error; err != nil {
+		return nil, err
+	}
+	return toUserEntity(&m), nil
+}
+
 func (r *UserRepository) ExistsByUsernameOrEmail(username, email string) (bool, error) {
 	var count int64
 	err := r.db.Model(&UserModel{}).Where("username = ? OR email = ?", username, email).Count(&count).Error

@@ -17,7 +17,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	sdkclient "ylmsdk/client"
-	sdkprovider "ylmsdk/provider/youmind"
+	sdkprovider "ylmsdk/provider"
 )
 
 // Wire 组装路由与依赖（可后续改为 wire/codegen）

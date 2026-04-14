@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +99,9 @@ type testProvider struct {
 }
 
 func (p *testProvider) EnsureSession(_ context.Context, sessionID string) (string, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return "allocated-upstream-id", nil
+	}
 	return sessionID, nil
 }
 
@@ -154,6 +158,70 @@ func TestChatInjectsResourceRefs(t *testing.T) {
 	}
 	if provider.lastReq.ResourceRefs[0].Content != "hello" {
 		t.Fatalf("expected resolved resource content")
+	}
+}
+
+func TestGetUpstreamGateUnboundWithSDKUnlocksInput(t *testing.T) {
+	now := time.Now().UTC()
+	projectRepo := &testProjectRepo{
+		projects: map[string]*project.Project{
+			"p1": {ID: "p1", UserID: "u1", CreatedAt: now, UpdatedAt: now},
+		},
+	}
+	sid := "sess-unbound"
+	sessionRepo := &testSessionRepo{sessions: map[string]*project.Session{
+		sid: {ID: sid, ProjectID: "p1", Title: "新对话", CreatedAt: now, UpdatedAt: now},
+	}}
+	messageRepo := &testMessageRepo{}
+	resourceRepo := &testResourceRepo{resources: map[string]*project.Resource{}}
+	provider := &testProvider{}
+	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
+	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, sdk, UpstreamSyncConfig{
+		BaseURL:       "https://upstream.example",
+		ServiceAPIKey: "secret",
+	})
+
+	gate, err := svc.GetUpstreamGate(context.Background(), "u1", "p1", sid)
+	if err != nil {
+		t.Fatalf("GetUpstreamGate: %v", err)
+	}
+	if gate.InputLocked {
+		t.Fatal("expected input unlocked when upstream unbound but SDK is configured")
+	}
+	if gate.Phase != "unbound" {
+		t.Fatalf("expected phase unbound, got %q", gate.Phase)
+	}
+	if gate.Detail != "" {
+		t.Fatalf("expected empty detail for quiet unbound gate, got %q", gate.Detail)
+	}
+}
+
+func TestSyncSessionStateUnboundReturnsEmpty(t *testing.T) {
+	now := time.Now().UTC()
+	projectRepo := &testProjectRepo{
+		projects: map[string]*project.Project{
+			"p1": {ID: "p1", UserID: "u1", CreatedAt: now, UpdatedAt: now},
+		},
+	}
+	sid := "sess-noup"
+	sessionRepo := &testSessionRepo{sessions: map[string]*project.Session{
+		sid: {ID: sid, ProjectID: "p1", Title: "新对话", CreatedAt: now, UpdatedAt: now},
+	}}
+	messageRepo := &testMessageRepo{}
+	resourceRepo := &testResourceRepo{resources: map[string]*project.Resource{}}
+	provider := &testProvider{}
+	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
+	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, sdk, UpstreamSyncConfig{
+		BaseURL:       "https://upstream.example",
+		ServiceAPIKey: "secret",
+	})
+
+	res, err := svc.SyncSessionState(context.Background(), "p1", sid, nil)
+	if err != nil {
+		t.Fatalf("SyncSessionState: %v", err)
+	}
+	if res == nil || res.ArtifactCount != 0 || res.TodoCount != 0 {
+		t.Fatalf("unexpected result: %+v", res)
 	}
 }
 

@@ -280,11 +280,8 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 		sessionID = *in.SessionID
 		if sess.UpstreamSessionID != nil && strings.TrimSpace(*sess.UpstreamSessionID) != "" {
 			upstreamSessionID = strings.TrimSpace(*sess.UpstreamSessionID)
-		} else {
-			// First chat before upstream binding: use local session id as temporary request id.
-			// Real upstream id will be set exactly once in ensureUpstreamSessionBinding().
-			upstreamSessionID = sessionID
 		}
+		// Empty upstreamSessionID means "allocate on activateUpstreamSession via EnsureSession(\"\")".
 		// 若当前标题仍是「新对话」，用首条消息更新
 		if sess.Title == "新对话" && strings.TrimSpace(in.Message) != "" {
 			sess.Title = titleFromMessage
@@ -294,7 +291,6 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 	} else {
 		now := time.Now().UTC()
 		localSessionID := uuid.NewString()
-		upstreamSessionID = localSessionID
 		sess := &project.Session{
 			ID:                localSessionID,
 			ProjectID:         projectID,
@@ -307,9 +303,6 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 			return "", "", "", err
 		}
 		sessionID = sess.ID
-	}
-	if upstreamSessionID == "" {
-		upstreamSessionID = sessionID
 	}
 
 	userMsg := &project.Message{
@@ -615,7 +608,7 @@ func (s *Service) SyncSessionState(ctx context.Context, projectID, sessionID str
 		}
 	}
 	if upstreamSessionID == "" {
-		return nil, ErrUpstreamSessionUnbound
+		return &SyncSessionStateResult{ArtifactCount: 0, TodoCount: 0}, nil
 	}
 	if err := s.refreshSessionMetaFromUpstream(ctx, projectID, sessionID); err != nil {
 		log.Printf("[chat-sync] refresh session meta failed project=%s session=%s err=%v", projectID, sessionID, err)
@@ -1243,30 +1236,82 @@ func (s *Service) ensureUpstreamSessionBinding(projectID, sessionID, upstreamSes
 	}
 }
 
+const upstreamActivateMaxAttempts = 5
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+func activateRetryBackoff(attempt int) time.Duration {
+	// attempt is 1-based index of the retry (second try => attempt 2); cap spacing.
+	if attempt < 2 {
+		return 0
+	}
+	d := time.Duration(200*(attempt-1)) * time.Millisecond
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
+}
+
 func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessionID, upstreamSessionID string) (string, error) {
 	upstreamSessionID = strings.TrimSpace(upstreamSessionID)
-	if upstreamSessionID == "" {
-		return "", ErrUpstreamSessionUnbound
-	}
 	if s.sdkClient == nil {
-		// Legacy mode or tests without SDK client.
+		// Legacy mode or tests without SDK client: use local session id for upstream-less chat.
+		if upstreamSessionID == "" {
+			return sessionID, nil
+		}
 		return upstreamSessionID, nil
 	}
-	ensuredID, err := s.sdkClient.EnsureSession(ctx, upstreamSessionID)
-	if err != nil {
-		return "", mapSDKError(err)
-	}
-	ensuredID = strings.TrimSpace(ensuredID)
-	if ensuredID == "" {
-		return "", ErrUpstreamSessionUnbound
+	var ensuredID string
+	var ensureErr error
+	for attempt := 1; attempt <= upstreamActivateMaxAttempts; attempt++ {
+		if d := activateRetryBackoff(attempt); d > 0 {
+			if err := sleepWithContext(ctx, d); err != nil {
+				return "", err
+			}
+		}
+		var id string
+		id, ensureErr = s.sdkClient.EnsureSession(ctx, upstreamSessionID)
+		if ensureErr != nil {
+			if attempt == upstreamActivateMaxAttempts {
+				return "", mapSDKError(ensureErr)
+			}
+			continue
+		}
+		ensuredID = strings.TrimSpace(id)
+		if ensuredID == "" {
+			if attempt == upstreamActivateMaxAttempts {
+				return "", ErrUpstreamSessionUnbound
+			}
+			continue
+		}
+		break
 	}
 	if err := s.ensureUpstreamSessionBinding(projectID, sessionID, ensuredID); err != nil {
 		return "", err
 	}
-	if err := s.waitUpstreamSessionReady(ctx, ensuredID); err != nil {
-		return "", err
+	var waitErr error
+	for attempt := 1; attempt <= upstreamActivateMaxAttempts; attempt++ {
+		if d := activateRetryBackoff(attempt); d > 0 {
+			if err := sleepWithContext(ctx, d); err != nil {
+				return "", err
+			}
+		}
+		waitErr = s.waitUpstreamSessionReady(ctx, ensuredID)
+		if waitErr == nil {
+			return ensuredID, nil
+		}
+		if attempt == upstreamActivateMaxAttempts {
+			return "", waitErr
+		}
 	}
-	return ensuredID, nil
+	return "", waitErr
 }
 
 func (s *Service) waitUpstreamSessionReady(ctx context.Context, upstreamSessionID string) error {
@@ -1355,9 +1400,22 @@ func (s *Service) GetUpstreamGate(ctx context.Context, userID, projectID, sessio
 	}
 	out.UpstreamSessionID = up
 	if up == "" {
-		out.Phase = "unbound"
-		out.InputLocked = true
-		out.Detail = "会话尚未绑定远端 Agent"
+		hasUpstreamCfg := strings.TrimSpace(s.upstreamBaseURL) != "" && strings.TrimSpace(s.upstreamAPIKey) != ""
+		switch {
+		case !hasUpstreamCfg:
+			out.Phase = "ready"
+			out.Status = "local"
+			out.InputLocked = false
+			out.CanStop = false
+		case s.sdkClient != nil:
+			out.Phase = "unbound"
+			out.InputLocked = false
+			// No detail: connection runs on first send with server-side retries; avoid noisy UI.
+		default:
+			out.Phase = "unbound"
+			out.InputLocked = true
+			out.Detail = "已配置远端但未启用对话 SDK，无法自动分配会话；请配置 SDK 或通过接口绑定 upstream_session_id"
+		}
 		return out, nil
 	}
 	if strings.TrimSpace(s.upstreamBaseURL) == "" || strings.TrimSpace(s.upstreamAPIKey) == "" {

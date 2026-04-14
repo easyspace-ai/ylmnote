@@ -6,6 +6,8 @@ type Repository interface {
 	GetByID(id string) (*User, error)
 	GetByUsername(username string) (*User, error)
 	GetByEmail(email string) (*User, error)
+	// GetByUsernameOrEmail 用同一字段匹配用户名或邮箱（登录表单）
+	GetByUsernameOrEmail(value string) (*User, error)
 	ExistsByUsernameOrEmail(username, email string) (bool, error)
 	Update(u *User) error
 }

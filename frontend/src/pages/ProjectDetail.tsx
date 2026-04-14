@@ -381,7 +381,9 @@ export default function ProjectDetail() {
             : upstreamGate?.phase === 'offline'
               ? '无法连接远端，请检查网络或上游服务'
               : upstreamGate?.phase === 'unbound'
-                ? '会话未绑定远端 Agent，无法发送'
+                ? upstreamGate?.input_locked
+                  ? '会话未绑定远端 Agent，无法发送'
+                  : null
                 : null
 
   const handleUpstreamStop = async () => {

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"strings"
 	"time"
 
 	"github.com/easyspace-ai/ylmnote/internal/config"
@@ -90,7 +91,8 @@ type LoginResult struct {
 
 // Login 验证账号密码并返回 JWT
 func (s *Service) Login(in LoginInput) (*LoginResult, error) {
-	u, err := s.repo.GetByUsername(in.Username)
+	id := strings.TrimSpace(in.Username)
+	u, err := s.repo.GetByUsernameOrEmail(id)
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}

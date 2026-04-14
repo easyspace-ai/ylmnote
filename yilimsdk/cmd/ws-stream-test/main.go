@@ -19,7 +19,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	sdkclient "ylmsdk/client"
-	"ylmsdk/provider/youmind"
+	"ylmsdk/provider"
 	"ylmsdk/types"
 )
 
