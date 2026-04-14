@@ -1,0 +1,36 @@
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+run.log
+frontend.log
+backend.log
+proxy.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 临时补丁与迁移脚本
+patch_*.py
+backend/patch_*.py
+frontend/patch_*.py
+backend/migrate_*.py
+
+# 测试截图与相关产物
+*.screenshot.png
+*.screenshot.jpg
+e2e-test-*.png
+e2e-test-*.jpg
+final-screenshot.*
+assets/screenshots/
+*.jpg
+*.png
+
+# 本地环境变量（勿提交含真实口令/令牌的文件）
+.env
+.env.local
+.env.*.local

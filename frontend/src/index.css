@@ -1,0 +1,152 @@
+
+/* 
+ * AnythingLLM-like Markdown Styles
+ * ==============================================
+ */
+.anything-markdown,
+.anything-markdown > * {
+  font-weight: 400;
+  word-break: break-word;
+}
+
+/* 消除所有元素的默认边距狂飙 */
+.anything-markdown p, 
+.anything-markdown ul, 
+.anything-markdown ol, 
+.anything-markdown h1, 
+.anything-markdown h2, 
+.anything-markdown h3,
+.anything-markdown pre {
+  margin-top: 0;
+  margin-bottom: 0.75em;
+}
+
+.anything-markdown *:last-child {
+  margin-bottom: 0 !important;
+}
+
+.anything-markdown h1 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.6;
+  margin-top: 0.5em;
+  color: #1e293b;
+}
+
+.anything-markdown h2 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 0.5em;
+  color: #1e293b;
+}
+
+.anything-markdown h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 0.4em;
+  color: #1e293b;
+}
+
+.anything-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #334155;
+  font-size: 13px;
+  margin: 0.5em 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+
+.anything-markdown table thead {
+  background-color: #f8fafc;
+  color: #475569;
+  font-weight: bolder;
+}
+
+.anything-markdown table th,
+.anything-markdown table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  border-right: 1px solid #e2e8f0;
+  text-align: left;
+}
+
+.anything-markdown table th:last-child,
+.anything-markdown table td:last-child {
+  border-right: none;
+}
+
+.anything-markdown hr {
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  margin: 0.75em 0;
+}
+
+/* List Styles */
+.anything-markdown ol {
+  list-style: decimal;
+  padding-left: 16px;
+}
+
+.anything-markdown ul {
+  list-style: disc;
+  padding-left: 16px;
+}
+
+.anything-markdown li {
+  margin-bottom: 0.25em;
+  line-height: 1.6;
+}
+
+.anything-markdown p {
+  line-height: inherit;
+  margin-top: 0;
+  margin-bottom: 0.75em;
+}
+
+.anything-markdown p:last-child {
+  margin-bottom: 0.25em;
+}
+
+.anything-markdown pre {
+  margin: 0.85em 0;
+  overflow-x: auto;
+}
+
+.anything-markdown strong {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.anything-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.anything-markdown p code,
+.anything-markdown li code {
+  background-color: #f1f5f9;
+  color: #db2777; /* pink-600 */
+  padding: 0.15rem 0.3rem;
+  border-radius: 0.375rem;
+  font-size: 0.85em;
+  font-weight: 500;
+}
+
+/* User Bubble Inversion if needed */
+.bg-gray-900 .anything-markdown {
+  color: #f1f5f9;
+}
+.bg-gray-900 .anything-markdown h1,
+.bg-gray-900 .anything-markdown h2,
+.bg-gray-900 .anything-markdown h3,
+.bg-gray-900 .anything-markdown strong {
+  color: #ffffff;
+}
+.bg-gray-900 .anything-markdown p code,
+.bg-gray-900 .anything-markdown li code {
+  background-color: #334155;
+  color: #fce7f3; /* pink-200 */
+}

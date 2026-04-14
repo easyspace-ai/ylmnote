@@ -1,0 +1,23 @@
+--- /root/.openclaw/workspace/youmind-project/frontend/src/components/AIChatBox.tsx
++++ /root/.openclaw/workspace/youmind-project/frontend/src/components/AIChatBox.tsx
+@@ -8,7 +8,7 @@
+   ChevronDownIcon
+ } from '@heroicons/react/24/outline'
+ 
+-export type ChatMode = 'agent' | 'ask'
++export type ChatMode = 'chat' | 'agent' | 'ask' | 'query'
+ 
+ export interface ChatMessage {
+   id: string
+@@ -675,10 +675,10 @@
+                   title="让 AI 作为代理自动执行多步操作"
+                 >
+                   <button
+-                  onClick={() => setChatMode('agent')}
++                  onClick={() => setChatMode('chat')}
+                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+-                    chatMode === 'agent'
++                    chatMode === 'chat'
+                       ? 'bg-primary-50 text-primary-600'
+                       : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+                   }`}
