@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,10 +18,10 @@ import (
 	w6app "github.com/easyspace-ai/ylmnote/internal/application/w6"
 	"github.com/easyspace-ai/ylmnote/internal/config"
 	"github.com/easyspace-ai/ylmnote/internal/infrastructure/ai"
+	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
+	sdkprovider "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/provider"
 	"github.com/easyspace-ai/ylmnote/internal/infrastructure/persistence"
 	"github.com/gin-gonic/gin"
-	sdkclient "ylmsdk/client"
-	sdkprovider "ylmsdk/provider"
 )
 
 // Wire 组装路由与依赖（可后续改为 wire/codegen）
@@ -93,6 +94,8 @@ func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
 		ServiceAPIKey: cfg.SDK.ServiceAPIKey,
 		Debug:         cfg.SDK.Debug,
 	})
+
+	fmt.Println("====", cfg.SDK.Debug)
 	chatHandler := NewChatHandler(chatSvc)
 	chatGroup := api.Group("/chat")
 	chatGroup.Use(AuthMiddleware(authSvc))

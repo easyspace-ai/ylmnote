@@ -17,6 +17,8 @@ type Config struct {
 	DatabaseURL          string
 	JWTSecret            string
 	AccessTokenExpireMin int
+	LogFilePath          string
+	LogToStdout          bool
 
 	// W6 is configuration for the IECube W6 AI gateway.
 	// All fields are loaded from environment variables (see .env.example).
@@ -50,6 +52,9 @@ type AISDKConfig struct {
 	ServiceAPIKey string
 	UploadPath    string
 	TimeoutSec    int
+	WSWriteTimeoutSec     int
+	WSHandshakeTimeoutSec int
+	WSDialTimeoutSec      int
 	RetryMax      int
 	LegacyMode    bool
 	// Debug 为 true 时打印 SDK / 上游 HTTP 详细日志（环境变量 AI_SDK_DEBUG=true）
@@ -114,6 +119,8 @@ func Load() *Config {
 		DatabaseURL:          getEnv("DATABASE_URL"),
 		JWTSecret:            getEnv("JWT_SECRET"),
 		AccessTokenExpireMin: getEnvInt("ACCESS_TOKEN_EXPIRE_MINUTES"),
+		LogFilePath:          strings.TrimSpace(getEnv("LOG_FILE_PATH")),
+		LogToStdout:          getEnvBoolDefault("LOG_TO_STDOUT", true),
 		W6: W6Config{
 			BaseURL:        getEnv("W6_BASE_URL"),
 			WSSBaseURL:     getEnv("W6_WSS_BASE_URL"),
@@ -129,6 +136,9 @@ func Load() *Config {
 			ServiceAPIKey: firstNonEmpty(getEnv("AI_SDK_SERVICE_API_KEY"), getEnv("AI_SDK_AUTH_HEADER_VAL")),
 			UploadPath:    getEnv("AI_SDK_UPLOAD_PATH"),
 			TimeoutSec:    getEnvInt("AI_SDK_TIMEOUT_SEC"),
+			WSWriteTimeoutSec:     getEnvInt("AI_SDK_WS_WRITE_TIMEOUT_SEC"),
+			WSHandshakeTimeoutSec: getEnvInt("AI_SDK_WS_HANDSHAKE_TIMEOUT_SEC"),
+			WSDialTimeoutSec:      getEnvInt("AI_SDK_WS_DIAL_TIMEOUT_SEC"),
 			RetryMax:      getEnvInt("AI_SDK_RETRY_MAX"),
 			LegacyMode:    getEnvBool("AI_SDK_LEGACY_MODE"),
 			Debug:         getEnvBool("AI_SDK_DEBUG"),
@@ -153,6 +163,9 @@ func Load() *Config {
 	if cfg.AppEnv == "" {
 		cfg.AppEnv = "development"
 	}
+	if cfg.LogFilePath == "" && strings.EqualFold(cfg.AppEnv, "development") {
+		cfg.LogFilePath = "./logs/backend.log"
+	}
 	if cfg.AccessTokenExpireMin == 0 {
 		cfg.AccessTokenExpireMin = 60
 	}
@@ -164,6 +177,15 @@ func Load() *Config {
 	}
 	if cfg.SDK.TimeoutSec <= 0 {
 		cfg.SDK.TimeoutSec = 120
+	}
+	if cfg.SDK.WSWriteTimeoutSec <= 0 {
+		cfg.SDK.WSWriteTimeoutSec = 8
+	}
+	if cfg.SDK.WSHandshakeTimeoutSec <= 0 {
+		cfg.SDK.WSHandshakeTimeoutSec = 15
+	}
+	if cfg.SDK.WSDialTimeoutSec <= 0 {
+		cfg.SDK.WSDialTimeoutSec = 15
 	}
 	if cfg.SDK.RetryMax <= 0 {
 		cfg.SDK.RetryMax = 2
@@ -215,6 +237,14 @@ func getEnvIntDefault(key string, def int) int {
 
 func getEnvBool(key string) bool {
 	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+func getEnvBoolDefault(key string, def bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return def
+	}
 	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 

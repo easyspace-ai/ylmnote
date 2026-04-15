@@ -10,10 +10,10 @@ import (
 
 	"github.com/easyspace-ai/ylmnote/internal/application/chat"
 	"github.com/easyspace-ai/ylmnote/internal/domain/user"
+	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
+	sdkstream "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/stream"
+	sdktypes "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/types"
 	"github.com/gin-gonic/gin"
-	sdkclient "ylmsdk/client"
-	sdkstream "ylmsdk/stream"
-	sdktypes "ylmsdk/types"
 )
 
 // ChatHandler 对话 HTTP 处理
@@ -50,6 +50,7 @@ type syncStateRequest struct {
 	ProjectID         string  `json:"project_id" binding:"required"`
 	SessionID         string  `json:"session_id" binding:"required"`
 	UpstreamSessionID *string `json:"upstream_session_id"`
+	ActivateUpstream  bool    `json:"activate_upstream"`
 }
 
 type upstreamStopRequest struct {
@@ -228,7 +229,15 @@ func (h *ChatHandler) syncState(c *gin.Context) {
 		return
 	}
 
-	result, err := h.svc.SyncSessionState(c.Request.Context(), req.ProjectID, req.SessionID, req.UpstreamSessionID)
+	var (
+		result *chat.SyncSessionStateResult
+		err    error
+	)
+	if req.ActivateUpstream {
+		result, err = h.svc.SyncSessionStateWithActivation(c.Request.Context(), req.ProjectID, req.SessionID, req.UpstreamSessionID)
+	} else {
+		result, err = h.svc.SyncSessionState(c.Request.Context(), req.ProjectID, req.SessionID, req.UpstreamSessionID)
+	}
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "chat_sync_state_error",
 			slog.String("user_id", u.ID),
@@ -242,6 +251,21 @@ func (h *ChatHandler) syncState(c *gin.Context) {
 		}
 		if errors.Is(err, chat.ErrUpstreamSessionUnbound) {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		// 上游离线/超时时不把会话页打红：降级为可恢复的轻量跳过。
+		errText := strings.ToLower(strings.TrimSpace(err.Error()))
+		if strings.Contains(errText, "upstream status") ||
+			strings.Contains(errText, "timeout") ||
+			strings.Contains(errText, "deadline exceeded") ||
+			strings.Contains(errText, "connection refused") ||
+			strings.Contains(errText, "no such host") {
+			c.JSON(http.StatusOK, gin.H{
+				"artifact_count": 0,
+				"todo_count":     0,
+				"skipped":        true,
+				"detail":         "upstream unavailable",
+			})
 			return
 		}
 		c.JSON(http.StatusBadGateway, gin.H{"detail": "sync session state failed"})

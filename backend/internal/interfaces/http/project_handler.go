@@ -11,8 +11,8 @@ import (
 	"github.com/easyspace-ai/ylmnote/internal/application/project"
 	w6app "github.com/easyspace-ai/ylmnote/internal/application/w6"
 	projectdomain "github.com/easyspace-ai/ylmnote/internal/domain/project"
+	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
 	"github.com/gin-gonic/gin"
-	sdkclient "ylmsdk/client"
 )
 
 // ProjectHandler 项目/消息/资源/上传 HTTP 处理
@@ -339,6 +339,7 @@ func toSessionResponse(s *projectdomain.Session) gin.H {
 		"id":                  s.ID,
 		"project_id":          s.ProjectID,
 		"upstream_session_id": s.UpstreamSessionID,
+		"upstream_verified":   s.UpstreamVerified,
 		"title":               s.Title,
 		"created_at":          s.CreatedAt,
 		"updated_at":          s.UpdatedAt,

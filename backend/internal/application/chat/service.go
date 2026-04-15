@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,25 +19,25 @@ import (
 
 	"github.com/easyspace-ai/ylmnote/internal/domain/project"
 	"github.com/easyspace-ai/ylmnote/internal/domain/user"
+	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
+	sdktypes "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/types"
 	"github.com/google/uuid"
-	sdkclient "ylmsdk/client"
-	sdktypes "ylmsdk/types"
 	"gorm.io/gorm"
 )
 
 // Service 对话应用服务
 type Service struct {
-	projectRepo      project.ProjectRepository
-	sessionRepo      project.SessionRepository
-	messageRepo      project.MessageRepository
-	resourceRepo     project.ResourceRepository
-	userRepo         user.Repository
-	chatCreditCost   int
-	sdkClient        *sdkclient.Client
-	upstreamBaseURL  string
-	upstreamAPIKey   string
-	httpClient       *http.Client
-	sdkDebug         bool
+	projectRepo     project.ProjectRepository
+	sessionRepo     project.SessionRepository
+	messageRepo     project.MessageRepository
+	resourceRepo    project.ResourceRepository
+	userRepo        user.Repository
+	chatCreditCost  int
+	sdkClient       *sdkclient.Client
+	upstreamBaseURL string
+	upstreamAPIKey  string
+	httpClient      *http.Client
+	sdkDebug        bool
 }
 
 type UpstreamSyncConfig struct {
@@ -184,6 +185,11 @@ func (s *Service) Chat(ctx context.Context, userID string, in ChatInput) (*ChatR
 	if err := s.ensureUpstreamSessionBinding(projectID, sessionID, assistantResp.SessionID); err != nil {
 		return nil, err
 	}
+	if assistantResp.HandshakeStateIDMatched {
+		if err := s.markSessionUpstreamVerified(projectID, sessionID); err != nil {
+			log.Printf("[chat] markSessionUpstreamVerified failed project=%s session=%s err=%v", projectID, sessionID, err)
+		}
+	}
 	if err := s.refreshSessionMetaFromUpstream(ctx, projectID, sessionID); err != nil {
 		log.Printf("[chat] refresh session meta failed project=%s session=%s err=%v", projectID, sessionID, err)
 	}
@@ -203,6 +209,7 @@ func (s *Service) Chat(ctx context.Context, userID string, in ChatInput) (*ChatR
 	}
 
 	s.chargeAfterSuccessfulChat(userID, projectID, assistantMsg.ID, in.Model)
+	s.triggerAsyncSessionBackfill(projectID, sessionID)
 
 	return &ChatResult{
 		ID:        assistantMsg.ID,
@@ -233,6 +240,9 @@ func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEve
 	}
 	s.sdkLogf("Stream start project=%s session=%s upstream=%s model=%q msg_len=%d refs=%d",
 		projectID, sessionID, upstreamSessionID, strOrEmpty(in.Model), len(in.Message), len(refs))
+	if strings.TrimSpace(upstreamSessionID) == "" {
+		log.Printf("[chat] Stream upstream_session_id empty project=%s local_session=%s — yilimsdk will omit WSS {\"id\"} frame until upstream assigns id", projectID, sessionID)
+	}
 	streamCapture := newStreamCapture()
 	assistantDraft := &project.Message{
 		ID:        uuid.NewString(),
@@ -294,6 +304,11 @@ func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEve
 	if err := s.ensureUpstreamSessionBinding(projectID, sessionID, resp.SessionID); err != nil {
 		return nil, err
 	}
+	if resp.HandshakeStateIDMatched {
+		if err := s.markSessionUpstreamVerified(projectID, sessionID); err != nil {
+			log.Printf("[chat-stream] markSessionUpstreamVerified failed project=%s session=%s err=%v", projectID, sessionID, err)
+		}
+	}
 	if err := s.refreshSessionMetaFromUpstream(ctx, projectID, sessionID); err != nil {
 		log.Printf("[chat-stream] refresh session meta failed project=%s session=%s err=%v", projectID, sessionID, err)
 	}
@@ -308,6 +323,7 @@ func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEve
 		log.Printf("[chat-stream] persist stream capture failed project=%s session=%s err=%v", projectID, sessionID, err)
 	}
 	s.chargeAfterSuccessfulChat(userID, projectID, assistantDraft.ID, in.Model)
+	s.triggerAsyncSessionBackfill(projectID, sessionID)
 	return &ChatResult{
 		ID:        "",
 		ProjectID: projectID,
@@ -320,6 +336,20 @@ func (s *Service) Stream(ctx context.Context, userID string, in ChatInput, onEve
 }
 
 const maxTitleRunes = 28
+const syncStateMessageLimit = 200
+const postChatSyncTimeout = 12 * time.Second
+
+func (s *Service) triggerAsyncSessionBackfill(projectID, sessionID string) {
+	// 对话完成后由后端异步回填远端 timeline（reasoning/system/tool）。
+	// 这样前端切会话或刷新后，历史消息能够与远端对齐。
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), postChatSyncTimeout)
+		defer cancel()
+		if _, err := s.SyncSessionState(ctx, projectID, sessionID, nil); err != nil {
+			log.Printf("[chat] async session backfill failed project=%s session=%s err=%v", projectID, sessionID, err)
+		}
+	}()
+}
 
 // truncateTitle 截取为会话标题，最多 maxRunes 个字符
 func truncateTitle(s string, maxRunes int) string {
@@ -362,7 +392,6 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 		if sess.UpstreamSessionID != nil && strings.TrimSpace(*sess.UpstreamSessionID) != "" {
 			upstreamSessionID = strings.TrimSpace(*sess.UpstreamSessionID)
 		}
-		// Empty upstreamSessionID means "allocate on activateUpstreamSession via EnsureSession(\"\")".
 		// 若当前标题仍是「新对话」，用首条消息更新
 		if sess.Title == "新对话" && strings.TrimSpace(in.Message) != "" {
 			sess.Title = titleFromMessage
@@ -372,10 +401,12 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 	} else {
 		now := time.Now().UTC()
 		localSessionID := uuid.NewString()
+		upstreamHint := generateUpstreamSessionID()
 		sess := &project.Session{
 			ID:                localSessionID,
 			ProjectID:         projectID,
-			UpstreamSessionID: nil,
+			UpstreamSessionID: &upstreamHint,
+			UpstreamVerified:  false,
 			Title:             titleFromMessage,
 			CreatedAt:         now,
 			UpdatedAt:         now,
@@ -384,6 +415,7 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 			return "", "", "", err
 		}
 		sessionID = sess.ID
+		upstreamSessionID = upstreamHint
 	}
 
 	userMsg := &project.Message{
@@ -400,6 +432,23 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 		return "", "", "", err
 	}
 	return projectID, sessionID, upstreamSessionID, nil
+}
+
+func generateUpstreamSessionID() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const n = 12
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		fallback := strings.ReplaceAll(uuid.NewString(), "-", "")
+		if len(fallback) >= n {
+			return fallback[:n]
+		}
+		return fallback
+	}
+	for i := range buf {
+		buf[i] = alphabet[int(buf[i])%len(alphabet)]
+	}
+	return string(buf)
 }
 
 // SaveAssistantMessage 流式结束后保存助手消息
@@ -668,6 +717,16 @@ type upstreamTimelineMessage struct {
 }
 
 func (s *Service) SyncSessionState(ctx context.Context, projectID, sessionID string, upstreamOverride *string) (*SyncSessionStateResult, error) {
+	return s.syncSessionStateInternal(ctx, projectID, sessionID, upstreamOverride, false)
+}
+
+// SyncSessionStateWithActivation 在同步前先执行一次 upstream 激活（EnsureSession+waitReady），
+// 用于“打开会话立即校准远端会话并刷新本地缓存”的场景。
+func (s *Service) SyncSessionStateWithActivation(ctx context.Context, projectID, sessionID string, upstreamOverride *string) (*SyncSessionStateResult, error) {
+	return s.syncSessionStateInternal(ctx, projectID, sessionID, upstreamOverride, true)
+}
+
+func (s *Service) syncSessionStateInternal(ctx context.Context, projectID, sessionID string, upstreamOverride *string, activateUpstream bool) (*SyncSessionStateResult, error) {
 	if strings.TrimSpace(s.upstreamBaseURL) == "" || strings.TrimSpace(s.upstreamAPIKey) == "" {
 		return &SyncSessionStateResult{}, nil
 	}
@@ -701,6 +760,13 @@ func (s *Service) SyncSessionState(ctx context.Context, projectID, sessionID str
 		)
 		return &SyncSessionStateResult{ArtifactCount: 0, TodoCount: 0}, nil
 	}
+	if activateUpstream && s.sdkClient != nil {
+		activatedID, err := s.activateUpstreamSession(ctx, projectID, sessionID, upstreamSessionID)
+		if err != nil {
+			return nil, err
+		}
+		upstreamSessionID = strings.TrimSpace(activatedID)
+	}
 	if err := s.refreshSessionMetaFromUpstream(ctx, projectID, sessionID); err != nil {
 		log.Printf("[chat-sync] refresh session meta failed project=%s session=%s err=%v", projectID, sessionID, err)
 	}
@@ -709,7 +775,7 @@ func (s *Service) SyncSessionState(ctx context.Context, projectID, sessionID str
 	if err != nil {
 		return nil, err
 	}
-	messagePayload, err := s.fetchUpstreamJSON(ctx, fmt.Sprintf("/api/agents/%s/messages?limit=500&offset=0", neturl.PathEscape(upstreamSessionID)))
+	messagePayload, err := s.fetchUpstreamJSON(ctx, fmt.Sprintf("/api/agents/%s/messages?limit=%d&offset=0", neturl.PathEscape(upstreamSessionID), syncStateMessageLimit))
 	if err != nil {
 		return nil, err
 	}
@@ -1320,6 +1386,19 @@ func (s *Service) EnsureProjectBelongsToUser(projectID, userID string) error {
 	return err
 }
 
+func (s *Service) markSessionUpstreamVerified(projectID, sessionID string) error {
+	sess, err := s.sessionRepo.GetByIDAndProjectID(sessionID, projectID)
+	if err != nil {
+		return err
+	}
+	if sess.UpstreamVerified {
+		return nil
+	}
+	sess.UpstreamVerified = true
+	sess.UpdatedAt = time.Now().UTC()
+	return s.sessionRepo.Update(sess)
+}
+
 func (s *Service) ensureUpstreamSessionBinding(projectID, sessionID, upstreamSessionID string) error {
 	upstreamSessionID = strings.TrimSpace(upstreamSessionID)
 	if upstreamSessionID == "" {
@@ -1350,13 +1429,14 @@ func (s *Service) ensureUpstreamSessionBinding(projectID, sessionID, upstreamSes
 	case current == upstreamSessionID:
 		return nil
 	default:
-		slog.Warn("upstream_session_binding_conflict",
+		// 库内已有绑定：忽略 SDK 报告的另一条 upstream id（常与 W6 首帧 state 展示不一致），防止每次流式/刷新都改写 sessions.upstream_session_id。
+		slog.Warn("upstream_session_binding_ignored_incoming",
 			slog.String("project_id", projectID),
 			slog.String("local_session_id", sessionID),
-			slog.String("current_upstream_session_id", current),
-			slog.String("incoming_upstream_session_id", upstreamSessionID),
+			slog.String("kept_upstream_session_id", current),
+			slog.String("ignored_incoming_upstream_session_id", upstreamSessionID),
 		)
-		return fmt.Errorf("%w: expected=%s got=%s", ErrUpstreamSessionConflict, current, upstreamSessionID)
+		return nil
 	}
 }
 
@@ -1394,6 +1474,7 @@ func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessio
 	}
 	var ensuredID string
 	var ensureErr error
+	var connectRes *sdkclient.SessionConnectResult
 	for attempt := 1; attempt <= upstreamActivateMaxAttempts; attempt++ {
 		if d := activateRetryBackoff(attempt); d > 0 {
 			if err := sleepWithContext(ctx, d); err != nil {
@@ -1402,8 +1483,7 @@ func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessio
 		}
 		s.sdkLogf("activate EnsureSession attempt=%d/%d project=%s session=%s hint=%q",
 			attempt, upstreamActivateMaxAttempts, projectID, sessionID, upstreamSessionID)
-		var id string
-		id, ensureErr = s.sdkClient.EnsureSession(ctx, upstreamSessionID)
+		connectRes, ensureErr = s.sdkClient.EnsureSession(ctx, upstreamSessionID)
 		if ensureErr != nil {
 			s.sdkLogf("activate EnsureSession err attempt=%d err=%v", attempt, ensureErr)
 			if attempt == upstreamActivateMaxAttempts {
@@ -1411,7 +1491,24 @@ func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessio
 			}
 			continue
 		}
-		ensuredID = strings.TrimSpace(id)
+		if connectRes == nil {
+			s.sdkLogf("activate EnsureSession nil result attempt=%d", attempt)
+			if attempt == upstreamActivateMaxAttempts {
+				return "", ErrUpstreamSessionUnbound
+			}
+			continue
+		}
+		if upstreamSessionID != "" && !connectRes.HandshakeStateIDMatched {
+			s.sdkLogf("activate EnsureSession mismatch attempt=%d hint=%q ensured=%q", attempt, upstreamSessionID, connectRes.SessionID)
+			if attempt == upstreamActivateMaxAttempts {
+				return "", mapSDKError(&sdktypes.SDKError{
+					Code:    sdktypes.ErrProtocol,
+					Message: fmt.Sprintf("upstream handshake mismatch for bound session hint=%s got=%s", upstreamSessionID, strings.TrimSpace(connectRes.SessionID)),
+				})
+			}
+			continue
+		}
+		ensuredID = strings.TrimSpace(connectRes.SessionID)
 		if ensuredID == "" {
 			s.sdkLogf("activate EnsureSession empty id attempt=%d", attempt)
 			if attempt == upstreamActivateMaxAttempts {
@@ -1419,11 +1516,16 @@ func (s *Service) activateUpstreamSession(ctx context.Context, projectID, sessio
 			}
 			continue
 		}
-		s.sdkLogf("activate EnsureSession ok upstream=%s", ensuredID)
+		s.sdkLogf("activate EnsureSession ok upstream=%s handshake_matched=%v", ensuredID, connectRes.HandshakeStateIDMatched)
 		break
 	}
 	if err := s.ensureUpstreamSessionBinding(projectID, sessionID, ensuredID); err != nil {
 		return "", err
+	}
+	if connectRes != nil && connectRes.HandshakeStateIDMatched {
+		if err := s.markSessionUpstreamVerified(projectID, sessionID); err != nil {
+			log.Printf("[chat] markSessionUpstreamVerified (activate) failed project=%s session=%s err=%v", projectID, sessionID, err)
+		}
 	}
 	var waitErr error
 	for attempt := 1; attempt <= upstreamActivateMaxAttempts; attempt++ {
@@ -1498,11 +1600,26 @@ func extractUpstreamAgentStatus(payload map[string]any) string {
 	if status := strings.TrimSpace(toString(payload["agent_status"])); status != "" {
 		return status
 	}
+	for _, k := range []string{"run_status", "lifecycle", "agent_state", "runState"} {
+		if status := strings.TrimSpace(toString(payload[k])); status != "" {
+			return status
+		}
+	}
 	if state, _ := payload["state"].(map[string]any); state != nil {
 		if status := strings.TrimSpace(toString(state["status"])); status != "" {
 			return status
 		}
 		if status := strings.TrimSpace(toString(state["agent_status"])); status != "" {
+			return status
+		}
+		for _, k := range []string{"run_status", "phase", "lifecycle"} {
+			if status := strings.TrimSpace(toString(state[k])); status != "" {
+				return status
+			}
+		}
+	}
+	if data, _ := payload["data"].(map[string]any); data != nil {
+		if status := strings.TrimSpace(toString(data["status"])); status != "" {
 			return status
 		}
 	}
@@ -1582,14 +1699,17 @@ func (s *Service) GetUpstreamGate(ctx context.Context, userID, projectID, sessio
 	case "idle", "ready", "normal", "paused", "waiting", "stopped", "completed", "done":
 		out.Phase = "ready"
 		out.InputLocked = false
-	case "running", "busy":
+	// 与 W6 / OpenAI-compatible Agent 常见状态对齐；未知字符串见 default
+	case "running", "busy", "executing", "processing", "generating", "active",
+		"in_progress", "working", "streaming", "thinking", "tool_running", "tool_calling":
 		out.Phase = "busy"
 		out.InputLocked = true
 		out.CanStop = canSDK
 	default:
+		// 上游若返回未列出的状态，仍锁输入但允许 Stop，避免刷新后永无停止入口
 		out.Phase = "blocked"
 		out.InputLocked = true
-		out.CanStop = false
+		out.CanStop = canSDK
 	}
 	s.sdkLogf("upstream-gate resolved project=%s session=%s phase=%s input_locked=%v can_stop=%v",
 		projectID, sessionID, out.Phase, out.InputLocked, out.CanStop)

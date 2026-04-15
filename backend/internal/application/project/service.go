@@ -2,14 +2,15 @@ package project
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/easyspace-ai/ylmnote/internal/domain/project"
+	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
 	"github.com/google/uuid"
-	sdkclient "ylmsdk/client"
 )
 
 // Service 项目应用服务
@@ -21,6 +22,8 @@ type Service struct {
 	promptTemplateRepo project.PromptTemplateRepository
 	aiSDK              *sdkclient.Client
 }
+
+const defaultSessionAsyncTimeout = 15 * time.Second
 
 func NewService(
 	projectRepo project.ProjectRepository,
@@ -50,8 +53,9 @@ func (s *Service) GetProject(projectID, userID string) (*project.Project, error)
 	return s.projectRepo.GetByIDAndUserID(projectID, userID)
 }
 
-// CreateProject 创建项目
+// CreateProject 创建项目（快速返回），默认会话在后台异步初始化。
 func (s *Service) CreateProject(ctx context.Context, userID, name string, description, coverImage *string) (*project.Project, error) {
+	_ = ctx
 	now := time.Now().UTC()
 	p := &project.Project{
 		ID:          uuid.NewString(),
@@ -66,12 +70,26 @@ func (s *Service) CreateProject(ctx context.Context, userID, name string, descri
 	if err := s.projectRepo.Create(p); err != nil {
 		return nil, err
 	}
-	// 项目创建后立即创建默认会话；若远端会话 ID 申请失败，回滚项目，避免产生无会话孤儿项目。
-	if _, err := s.CreateSession(ctx, p.ID, "新对话"); err != nil {
-		_ = s.projectRepo.Delete(p.ID, userID)
-		return nil, fmt.Errorf("create default session failed: %w", err)
-	}
+	// 不阻塞创建接口，后台尽力初始化一个默认会话。
+	go s.ensureDefaultSessionAsync(p.ID, userID)
 	return p, nil
+}
+
+func (s *Service) ensureDefaultSessionAsync(projectID, userID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultSessionAsyncTimeout)
+	defer cancel()
+
+	existing, err := s.sessionRepo.ListByProjectID(projectID, 0, 1)
+	if err != nil {
+		log.Printf("[project] async default session precheck failed project=%s user=%s err=%v", projectID, userID, err)
+		return
+	}
+	if len(existing) > 0 {
+		return
+	}
+	if _, err := s.CreateSession(ctx, projectID, "新对话"); err != nil {
+		log.Printf("[project] async default session create failed project=%s user=%s err=%v", projectID, userID, err)
+	}
 }
 
 // UpdateProject 更新项目
@@ -109,15 +127,31 @@ func (s *Service) ListSessions(projectID string, skip, limit int) ([]*project.Se
 	return s.sessionRepo.ListByProjectID(projectID, skip, limit)
 }
 
-// CreateSession 在项目下创建会话
+// CreateSession 在项目下创建会话。
+// 若配置了 AI SDK，会尽力在落库前调用 allocateUpstreamSessionID（EnsureSession("")）预占上游 id 并写入 upstream_session_id，
+// 避免「首条流式未完成即刷新」导致 upstream 仍为空、下次又新开上游会话。
+// 预占失败（网络/SDK 未配等）时会回退到本地生成的随机 upstream_session_id（如 w5FGu1pkFxaK），
+// 确保新会话从创建开始就有稳定 upstream hint。
 func (s *Service) CreateSession(ctx context.Context, projectID, title string) (*project.Session, error) {
-	_ = ctx
 	now := time.Now().UTC()
 	sessionID := uuid.NewString()
+	upstreamFallback := generateUpstreamSessionID()
+	upstreamPtr := &upstreamFallback
+	var upstreamVerified bool
+	if s.aiSDK != nil {
+		if id, verified, err := s.allocateUpstreamSessionID(ctx); err != nil {
+			log.Printf("[project] CreateSession eager upstream bind skipped project=%s err=%v", projectID, err)
+		} else {
+			up := id
+			upstreamPtr = &up
+			upstreamVerified = verified
+		}
+	}
 	sess := &project.Session{
 		ID:                sessionID,
 		ProjectID:         projectID,
-		UpstreamSessionID: nil,
+		UpstreamSessionID: upstreamPtr,
+		UpstreamVerified:  upstreamVerified,
 		Title:             title,
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -128,20 +162,40 @@ func (s *Service) CreateSession(ctx context.Context, projectID, title string) (*
 	return sess, nil
 }
 
-func (s *Service) allocateUpstreamSessionID(ctx context.Context) (string, error) {
+func (s *Service) allocateUpstreamSessionID(ctx context.Context) (id string, handshakeMatched bool, err error) {
 	if s.aiSDK == nil {
-		return "", fmt.Errorf("ai sdk is not configured")
+		return "", false, fmt.Errorf("ai sdk is not configured")
 	}
-	id, err := s.aiSDK.EnsureSession(ctx, "")
+	res, err := s.aiSDK.EnsureSession(ctx, "")
 	if err != nil {
 		log.Printf("[project-sdk] EnsureSession(new) failed err=%v", err)
-		return "", fmt.Errorf("ensure upstream session failed: %w", err)
+		return "", false, fmt.Errorf("ensure upstream session failed: %w", err)
 	}
-	id = strings.TrimSpace(id)
+	if res == nil {
+		return "", false, fmt.Errorf("ensure session returned nil")
+	}
+	id = strings.TrimSpace(res.SessionID)
 	if id == "" {
-		return "", fmt.Errorf("upstream session id is empty")
+		return "", false, fmt.Errorf("upstream session id is empty")
 	}
-	return id, nil
+	return id, res.HandshakeStateIDMatched, nil
+}
+
+func generateUpstreamSessionID() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const n = 12
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		fallback := strings.ReplaceAll(uuid.NewString(), "-", "")
+		if len(fallback) >= n {
+			return fallback[:n]
+		}
+		return fallback
+	}
+	for i := range buf {
+		buf[i] = alphabet[int(buf[i])%len(alphabet)]
+	}
+	return string(buf)
 }
 
 // UpdateSession 更新会话标题

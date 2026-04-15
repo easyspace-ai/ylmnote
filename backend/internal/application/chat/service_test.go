@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/easyspace-ai/ylmnote/internal/domain/project"
-	sdkclient "ylmsdk/client"
-	sdktypes "ylmsdk/types"
+	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
+	sdktypes "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/types"
 )
 
 type testProjectRepo struct {
@@ -98,11 +98,11 @@ type testProvider struct {
 	lastReq sdkclient.ChatRequest
 }
 
-func (p *testProvider) EnsureSession(_ context.Context, sessionID string) (string, error) {
+func (p *testProvider) EnsureSession(_ context.Context, sessionID string) (*sdkclient.SessionConnectResult, error) {
 	if strings.TrimSpace(sessionID) == "" {
-		return "allocated-upstream-id", nil
+		return &sdkclient.SessionConnectResult{SessionID: "allocated-upstream-id", HandshakeStateIDMatched: true}, nil
 	}
-	return sessionID, nil
+	return &sdkclient.SessionConnectResult{SessionID: sessionID, HandshakeStateIDMatched: true}, nil
 }
 
 func (p *testProvider) Send(_ context.Context, req sdkclient.ChatRequest) (*sdkclient.ChatResponse, error) {

@@ -4,8 +4,8 @@ import (
 	"context"
 	"log"
 
-	sdkclient "ylmsdk/client"
-	sdktypes "ylmsdk/types"
+	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
+	sdktypes "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/types"
 )
 
 type LegacySDKAdapter struct {
@@ -16,8 +16,8 @@ func NewLegacySDKAdapter(client *Client) *LegacySDKAdapter {
 	return &LegacySDKAdapter{client: client}
 }
 
-func (a *LegacySDKAdapter) EnsureSession(_ context.Context, sessionID string) (string, error) {
-	return sessionID, nil
+func (a *LegacySDKAdapter) EnsureSession(_ context.Context, sessionID string) (*sdkclient.SessionConnectResult, error) {
+	return &sdkclient.SessionConnectResult{SessionID: sessionID, HandshakeStateIDMatched: false}, nil
 }
 
 func (a *LegacySDKAdapter) Send(ctx context.Context, req sdkclient.ChatRequest) (*sdkclient.ChatResponse, error) {

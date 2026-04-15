@@ -15,7 +15,12 @@ import (
 
 func main() {
 	cfg := config.Load()
-	applog.Init(cfg.AppEnv)
+
+	if err := applog.Init(cfg.AppEnv, cfg.LogFilePath, cfg.LogToStdout); err != nil {
+		fmt.Println("init logger failed:", err)
+		os.Exit(1)
+	}
+	defer applog.Close()
 	db, err := persistence.New(cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("database_init_failed", slog.Any("err", err))

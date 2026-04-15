@@ -19,9 +19,11 @@ type Session struct {
 	ID                string
 	ProjectID         string
 	UpstreamSessionID *string
-	Title             string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// UpstreamVerified：与上游 WSS 握手时，首包 update.state.id 与发出的 {"id":upstream} 一致（或新会话首次成功拿到官方 id）后为 true；用于区分「仅本地/未对齐」与「已与官方 id 对齐」。
+	UpstreamVerified bool
+	Title              string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // Message 消息实体（属于会话，会话属于项目）

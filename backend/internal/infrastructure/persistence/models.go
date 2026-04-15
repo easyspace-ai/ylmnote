@@ -40,6 +40,7 @@ type SessionModel struct {
 	ID                string    `gorm:"primaryKey"`
 	ProjectID         string    `gorm:"index;not null"`
 	UpstreamSessionID *string   `gorm:"index"`
+	UpstreamVerified  bool      `gorm:"not null;default:false"`
 	Title             string    `gorm:"not null"`
 	CreatedAt         time.Time `gorm:"not null"`
 	UpdatedAt         time.Time `gorm:"not null"`

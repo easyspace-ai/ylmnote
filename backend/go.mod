@@ -13,10 +13,10 @@ require (
 	golang.org/x/time v0.15.0
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.25.12
-	ylmsdk v0.0.0
+	ws-chat-tester v0.0.0
 )
 
-replace ylmsdk => ../yilimsdk
+replace ws-chat-tester => ../sdk
 
 require (
 	github.com/bytedance/sonic v1.11.6 // indirect
