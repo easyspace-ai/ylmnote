@@ -53,7 +53,6 @@ export function MessageList({
     return [...messages].reverse().find(m => m.role === 'assistant')?.id
   }, [messages])
 
-  // 将消息分组（普通消息和思考过程分组）
   const messageGroups = useMemo<MessageGroup[]>(() => {
     const groups: MessageGroup[] = []
     let processBuffer: ChatMessage[] = []
@@ -87,6 +86,21 @@ export function MessageList({
     flushBuffer()
     return groups
   }, [messages, latestAssistantId])
+
+  const streamingFooter = useMemo(() => {
+    if (!isStreaming) return null
+    const last = messageGroups[messageGroups.length - 1]
+    const thinkingLive = last?.type === 'process-group' && last.hasLatestAssistant
+    if (thinkingLive) {
+      return (
+        <div className="flex items-center justify-start gap-2 pl-1 text-xs text-zinc-500 dark:text-white/60">
+          <StreamingIndicator variant="minimal" className="shrink-0" />
+          <span>正在生成回复…</span>
+        </div>
+      )
+    }
+    return <StreamingIndicator />
+  }, [isStreaming, messageGroups])
 
   // 自动滚动逻辑
   useEffect(() => {
@@ -127,14 +141,14 @@ export function MessageList({
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className={cn('flex-1 min-h-0 overflow-y-auto px-6 pt-6 pb-4', className)}
+      className={cn('flex-1 min-h-0 overflow-y-auto px-4 pt-8 pb-4 dark:bg-[#212121]', className)}
     >
       {messages.length > 0 ? (
-        <div className="space-y-4 max-w-3xl mx-auto">
+        <div className="mx-auto max-w-3xl space-y-5">
           {/* 加载更早消息提示 */}
           {(loadingOlder || hasMoreOlder) && (
             <div className="flex justify-center">
-              <div className="text-xs text-gray-400 bg-gray-50 border border-gray-100 rounded-full px-3 py-1">
+              <div className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-400 dark:border-white/10 dark:bg-white/5 dark:text-white/50">
                 {loadingOlder ? '加载更早消息中...' : '上滑可加载更早消息'}
               </div>
             </div>
@@ -164,32 +178,18 @@ export function MessageList({
             )
           })}
 
-          {/* 流式响应指示器 */}
-          {isStreaming && <StreamingIndicator />}
+          {streamingFooter}
 
           {/* 滚动锚点 */}
           <div ref={messagesEndRef} />
         </div>
       ) : (
         /* 空状态 */
-        <div className="flex flex-col items-center justify-center h-full text-center select-none">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 flex items-center justify-center mb-4">
-            <svg
-              className="w-8 h-8 text-indigo-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-              />
-            </svg>
+        <div className="flex h-full select-none flex-col items-center justify-center text-center">
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-3xl border shadow dark:border-white/15">
+            <span className="text-sm font-semibold text-zinc-700 dark:text-white">C</span>
           </div>
-          <p className="text-sm font-medium text-gray-900 mb-1">开始对话</p>
-          <p className="text-sm text-gray-500">输入你的问题，或选择技能开始</p>
+          <p className="mb-1 text-xl text-zinc-900 dark:text-white">How can I help you today?</p>
         </div>
       )}
     </div>

@@ -21,6 +21,8 @@ export interface ChatMessage {
   role: MessageRole
   content: string
   messageKind?: MessageKind
+  /** 上游帧 kind 原文：reasoning / internal_thought / subliminal_thought / system 等，用于过程卡片细分标签 */
+  upstreamKind?: string
   thinkingTime?: number
   status?: MessageStatus
   timestamp?: Date

@@ -58,6 +58,8 @@ interface AIChatBoxNewProps {
 
   // 默认值
   defaultInputValue?: string
+  /** 父组件注入输入框内容（如 Studio 技能提示词），以 seq 变化为准 */
+  inputPrefill?: { seq: number; text: string }
   defaultMode?: ChatMode
   defaultModel?: string
   autoSend?: boolean
@@ -98,6 +100,7 @@ export default function AIChatBoxNew({
   stoppingUpstream = false,
   onUpstreamStop,
   defaultInputValue = '',
+  inputPrefill,
   defaultMode = 'chat',
   defaultModel = 'google/gemini-3-flash-preview',
   autoSend = false,
@@ -163,6 +166,7 @@ export default function AIChatBoxNew({
       upstreamBanner={upstreamBanner}
       stoppingUpstream={stoppingUpstream}
       onUpstreamStop={onUpstreamStop}
+      inputPrefill={inputPrefill}
       onTodoToggle={(id, done) => {
         // 处理待办事项切换
       }}

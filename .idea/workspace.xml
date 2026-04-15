@@ -1,4 +1,110 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PropertiesComponent">{}</component>
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="c4873d76-20a5-4a5c-a543-f4ffe3969e6b" name="更改" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/cmd/server/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/cmd/server/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/application/chat/service.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/application/chat/service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/application/chat/service_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/application/chat/service_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/application/project/service.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/application/project/service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/config/config.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/domain/project/entity.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/domain/project/entity.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/legacy_sdk_adapter.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/ai/legacy_sdk_adapter.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/models.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/models.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/session_repo.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/session_repo.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/chat_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/chat_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/project_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/project_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/router.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/metanote.db" beforeDir="false" afterPath="$PROJECT_DIR$/backend/metanote.db" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/doc/REMOTE_SESSION_AND_DATA_FLOW.md" beforeDir="false" afterPath="$PROJECT_DIR$/doc/REMOTE_SESSION_AND_DATA_FLOW.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/doc/bak/THIRD_PARTY_INTEGRATION.md" beforeDir="false" afterPath="$PROJECT_DIR$/doc/bak/THIRD_PARTY_INTEGRATION.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/AIChatBoxNew.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/AIChatBoxNew.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/ChatInput.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/ChatInput.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/MessageList.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/MessageList.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/ThinkingProcess.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/ThinkingProcess.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/hooks/useUpstreamGate.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/hooks/useUpstreamGate.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/services/api.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/services/api.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/stores/api/sessionMessageCache.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/api/sessionMessageCache.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/stores/apiStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/apiStore.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/types/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/types/index.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/yilimsdk/client/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/yilimsdk/client/client.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/yilimsdk/client/client_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/yilimsdk/client/client_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/yilimsdk/cmd/ws-stream-test/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/yilimsdk/cmd/ws-stream-test/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/yilimsdk/provider/provider.go" beforeDir="false" afterPath="$PROJECT_DIR$/yilimsdk/provider/provider.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/yilimsdk/provider/provider_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/yilimsdk/provider/provider_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/yilimsdk/types/types.go" beforeDir="false" afterPath="$PROJECT_DIR$/yilimsdk/types/types.go" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="GOROOT" url="file://$USER_HOME$/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.1.darwin-arm64" />
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 2
+}]]></component>
+  <component name="ProjectId" id="3CM6j5auXYxqYSfg7aou1GK63ug" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.GoLinterPluginOnboarding": "true",
+    "RunOnceActivity.GoLinterPluginStorageMigration": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.go.migrated.go.modules.settings": "true",
+    "RunOnceActivity.go.modules.go.list.on.any.changes.was.set": "true",
+    "git-widget-placeholder": "leven",
+    "go.import.settings.migrated": "true",
+    "go.sdk.automatically.set": "true",
+    "last_opened_file_path": "/Users/leven/space/react/youmind/doc",
+    "node.js.detected.package.eslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "ts.external.directory.path": "/Users/leven/space/react/youmind/frontend/node_modules/typescript/lib"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/doc" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-gosdk-3b128438d3f6-07d2d2d66b1e-org.jetbrains.plugins.go.sharedIndexes.bundled-GO-251.26927.50" />
+        <option value="bundled-js-predefined-d6986cc7102b-09060db00ec0-JavaScript-GO-251.26927.50" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="c4873d76-20a5-4a5c-a543-f4ffe3969e6b" name="更改" comment="" />
+      <created>1776183223882</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1776183223882</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VgoProject">
+    <settings-migrated>true</settings-migrated>
+  </component>
 </project>

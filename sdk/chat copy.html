@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 会话调试页</title>
+  <style>
+    :root {
+      --bg: #0c1020;
+      --panel: #151b33;
+      --panel-soft: #1b2240;
+      --border: #2d3761;
+      --text: #e8edff;
+      --muted: #9ea8d8;
+      --primary: #6da6ff;
+      --primary-strong: #3f85ff;
+      --user: #294d99;
+      --assistant: #1f3b2e;
+      --error: #ff6d6d;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #22305e 0%, transparent 50%),
+        radial-gradient(900px 500px at 90% 10%, #1a2752 0%, transparent 45%),
+        var(--bg);
+    }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .config {
+      display: grid;
+      grid-template-columns: 1.4fr 1.2fr auto auto;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      background: rgba(16, 21, 42, 0.85);
+      border-radius: 12px;
+      backdrop-filter: blur(6px);
+    }
+
+    .field {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    input {
+      width: 100%;
+      padding: 9px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f1530;
+      color: var(--text);
+      outline: none;
+    }
+    input:focus { border-color: var(--primary); }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 14px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #293253;
+      color: var(--text);
+    }
+
+    .layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(28,35,66,0.85) 0%, rgba(17,23,45,0.9) 100%);
+      border-radius: 12px;
+      min-height: 0;
+      display: grid;
+    }
+
+    .sidebar {
+      grid-template-rows: auto 1fr;
+    }
+
+    .card-head {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      color: #dbe3ff;
+    }
+
+    .session-list {
+      overflow: auto;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .session-item {
+      border: 1px solid var(--border);
+      background: var(--panel-soft);
+      padding: 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: 0.18s ease;
+    }
+    .session-item:hover { border-color: var(--primary); transform: translateY(-1px); }
+    .session-item.active {
+      border-color: var(--primary);
+      background: #253765;
+    }
+    .session-id {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      word-break: break-all;
+    }
+
+    .chat {
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .chat-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #6a738e;
+      display: inline-block;
+      margin-right: 6px;
+    }
+    .status-dot.ok { background: #63d28f; }
+    .status-dot.busy { background: #ffcc66; }
+    .status-dot.err { background: var(--error); }
+
+    .messages {
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .msg {
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      border-radius: 10px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 14px;
+    }
+    .msg.user { background: var(--user); }
+    .msg.assistant { background: var(--assistant); }
+    .msg.system { background: #2f3554; color: var(--muted); }
+    .msg.error { border-color: #763f4a; background: #3f2029; color: #ffbfc7; }
+
+    .composer {
+      border-top: 1px solid var(--border);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+
+    .composer input {
+      font-size: 14px;
+      padding: 10px 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="config">
+      <div class="field">
+        <label for="baseUrl">API Base URL</label>
+        <input id="baseUrl" value="https://w6.hc.infhis.cn" />
+      </div>
+      <div class="field">
+        <label for="apiKey">x-w6service-api-key</label>
+        <input id="apiKey" placeholder="请输入 API Key" />
+      </div>
+      <button id="btnConnect">连接并加载会话</button>
+      <button id="btnReload" class="secondary">刷新会话</button>
+    </div>
+
+    <div class="layout">
+      <section class="card sidebar">
+        <div class="card-head">会话列表</div>
+        <div class="session-list" id="sessionList"></div>
+      </section>
+
+      <section class="card chat">
+        <div class="chat-meta">
+          <div>当前会话：<span id="activeChatLabel">未选择</span></div>
+          <div><span class="status-dot" id="wsDot"></span><span id="wsText">未连接</span></div>
+        </div>
+        <div class="messages" id="messages"></div>
+        <div class="composer">
+          <input id="messageInput" placeholder="输入消息后回车或点击发送" />
+          <button id="btnSend">发送</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      baseUrl: "",
+      apiKey: "",
+      sessions: [],
+      activeChatId: "",
+      ws: null,
+      wsConnected: false,
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const ui = {
+      baseUrl: $("baseUrl"),
+      apiKey: $("apiKey"),
+      btnConnect: $("btnConnect"),
+      btnReload: $("btnReload"),
+      sessionList: $("sessionList"),
+      activeChatLabel: $("activeChatLabel"),
+      messages: $("messages"),
+      messageInput: $("messageInput"),
+      btnSend: $("btnSend"),
+      wsDot: $("wsDot"),
+      wsText: $("wsText"),
+    };
+
+    function saveConfig() {
+      localStorage.setItem("chat.baseUrl", ui.baseUrl.value.trim());
+      localStorage.setItem("chat.apiKey", ui.apiKey.value.trim());
+    }
+
+    function loadConfig() {
+      const base = localStorage.getItem("chat.baseUrl");
+      const key = localStorage.getItem("chat.apiKey");
+      if (base) ui.baseUrl.value = base;
+      if (key) ui.apiKey.value = key;
+    }
+
+    function setWsStatus(type, text) {
+      ui.wsDot.className = "status-dot" + (type ? " " + type : "");
+      ui.wsText.textContent = text;
+    }
+
+    function appendMessage(role, content) {
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      div.textContent = content;
+      ui.messages.appendChild(div);
+      ui.messages.scrollTop = ui.messages.scrollHeight;
+    }
+
+    function clearMessages() {
+      ui.messages.innerHTML = "";
+    }
+
+    function safeJSON(data) {
+      try { return JSON.stringify(data, null, 2); }
+      catch { return String(data); }
+    }
+
+    function wsUrlFromBase(base) {
+      const u = new URL(base);
+      u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+      u.pathname = "/api/ws/run";
+      u.search = "";
+      u.hash = "";
+      return u.toString();
+    }
+
+    async function apiGet(path) {
+      const res = await fetch(`${state.baseUrl}${path}`, {
+        headers: { "x-w6service-api-key": state.apiKey },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`${path} -> HTTP ${res.status}: ${text || res.statusText}`);
+      }
+      return res.json();
+    }
+
+    function renderSessions() {
+      ui.sessionList.innerHTML = "";
+      if (!state.sessions.length) {
+        const empty = document.createElement("div");
+        empty.className = "session-item";
+        empty.textContent = "暂无会话";
+        ui.sessionList.appendChild(empty);
+        return;
+      }
+
+      state.sessions.forEach((s) => {
+        const item = document.createElement("div");
+        item.className = "session-item" + (s.id === state.activeChatId ? " active" : "");
+        item.innerHTML = `
+          <div>${s.name || "未命名会话"}</div>
+          <div class="session-id">${s.id}</div>
+        `;
+        item.addEventListener("click", () => selectSession(s.id));
+        ui.sessionList.appendChild(item);
+      });
+    }
+
+    function extractTextParts(parts) {
+      if (!Array.isArray(parts)) return "";
+      return parts
+        .map((p) => (typeof p?.content === "string" ? p.content : ""))
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    function historyToMessages(payload) {
+      const list = Array.isArray(payload?.messages) ? payload.messages : [];
+      return list.map((m) => {
+        const role = m.role || (m.kind === "from_user" ? "user" : "assistant");
+        const content = typeof m.content === "string" ? m.content : extractTextParts(m.message_parts) || safeJSON(m);
+        return { role, content };
+      });
+    }
+
+    async function loadSessions() {
+      const data = await apiGet("/api/agents");
+      state.sessions = Array.isArray(data?.agents) ? data.agents : [];
+      renderSessions();
+      if (!state.activeChatId && state.sessions[0]?.id) {
+        await selectSession(state.sessions[0].id);
+      }
+    }
+
+    async function loadHistory(chatId) {
+      clearMessages();
+      appendMessage("system", `正在拉取会话历史：${chatId}`);
+      const data = await apiGet(`/api/agents/${encodeURIComponent(chatId)}/messages?limit=200&offset=0`);
+      clearMessages();
+      const list = historyToMessages(data);
+      if (!list.length) {
+        appendMessage("system", "该会话暂无历史消息");
+        return;
+      }
+      list.forEach((m) => appendMessage(m.role === "user" ? "user" : "assistant", m.content));
+    }
+
+    function disconnectWs() {
+      if (state.ws) {
+        try { state.ws.close(); } catch {}
+      }
+      state.ws = null;
+      state.wsConnected = false;
+      setWsStatus("", "未连接");
+    }
+
+    function connectWsForSession(chatId) {
+      disconnectWs();
+      const ws = new WebSocket(wsUrlFromBase(state.baseUrl));
+      state.ws = ws;
+      setWsStatus("", "连接中");
+
+      ws.onopen = () => {
+        state.wsConnected = true;
+        setWsStatus("ok", "已连接");
+        ws.send(JSON.stringify({ id: chatId }));
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          const type = String(msg.type || "").toLowerCase();
+          if (type === "status") {
+            if (msg.status === "busy" || msg.status === "running") {
+              setWsStatus("busy", `运行中(${msg.status})`);
+            } else {
+              setWsStatus("ok", `已连接(${msg.status || "idle"})`);
+            }
+            return;
+          }
+          if (type === "error") {
+            appendMessage("error", msg.error || safeJSON(msg));
+            setWsStatus("err", "连接异常");
+            return;
+          }
+          if (type === "update" && Array.isArray(msg.messages) && msg.messages.length) {
+            msg.messages.forEach((m) => {
+              const role = m.kind === "from_user" ? "user" : "assistant";
+              const content = extractTextParts(m.message_parts) || safeJSON(m);
+              appendMessage(role, content);
+            });
+            return;
+          }
+          appendMessage("system", safeJSON(msg));
+        } catch {
+          appendMessage("system", String(ev.data));
+        }
+      };
+
+      ws.onerror = () => {
+        setWsStatus("err", "连接错误");
+      };
+
+      ws.onclose = () => {
+        state.wsConnected = false;
+        setWsStatus("", "已断开");
+      };
+    }
+
+    async function selectSession(chatId) {
+      state.activeChatId = chatId;
+      ui.activeChatLabel.textContent = chatId;
+      renderSessions();
+      await loadHistory(chatId);
+      connectWsForSession(chatId);
+    }
+
+    function sendMessage() {
+      const content = ui.messageInput.value.trim();
+      if (!content) return;
+      if (!state.activeChatId) {
+        appendMessage("error", "请先选择会话");
+        return;
+      }
+      if (!state.ws || !state.wsConnected) {
+        appendMessage("error", "WebSocket 未连接，请重新选择会话");
+        return;
+      }
+      const payload = {
+        type: "input",
+        id: state.activeChatId,
+        content,
+        attachments: [],
+      };
+      state.ws.send(JSON.stringify(payload));
+      appendMessage("user", content);
+      ui.messageInput.value = "";
+    }
+
+    async function connectAndLoad() {
+      state.baseUrl = ui.baseUrl.value.trim().replace(/\/+$/, "");
+      state.apiKey = ui.apiKey.value.trim();
+      if (!state.baseUrl || !state.apiKey) {
+        appendMessage("error", "请填写 API Base URL 和 API Key");
+        return;
+      }
+      saveConfig();
+      try {
+        await loadSessions();
+      } catch (err) {
+        appendMessage("error", `加载会话失败: ${err.message}`);
+      }
+    }
+
+    ui.btnConnect.addEventListener("click", connectAndLoad);
+    ui.btnReload.addEventListener("click", async () => {
+      try {
+        await loadSessions();
+      } catch (err) {
+        appendMessage("error", `刷新会话失败: ${err.message}`);
+      }
+    });
+    ui.btnSend.addEventListener("click", sendMessage);
+    ui.messageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendMessage();
+    });
+    ui.baseUrl.addEventListener("change", saveConfig);
+    ui.apiKey.addEventListener("change", saveConfig);
+
+    loadConfig();
+    appendMessage("system", "请填写配置后，点击“连接并加载会话”。");
+  </script>
+</body>
+</html>

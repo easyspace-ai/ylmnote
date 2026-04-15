@@ -18,6 +18,7 @@ interface AppState {
   // 加载状态
   loading: boolean
   isStreaming: boolean
+  streamingBySession: Record<string, boolean>
   error: string | null
   
   // 项目
@@ -82,10 +83,10 @@ interface AppState {
     /** 可选：与内部 controller 并行中止（例如父组件卸载） */
     externalAbortSignal?: AbortSignal
   ) => Promise<void>
-  /** 中止当前流式读取（不影响已落库内容）；切换会话或远端 Stop 后应调用 */
-  abortActiveMessageStream: () => void
+  /** 中止流式读取：不传则中止全部；传 sessionId 则仅中止该会话 */
+  abortActiveMessageStream: (sessionId?: string) => void
   sendW6PageFromOutlineStream: (projectId: string, payload: { title: string; outline: string; knowledgePoints?: string }, callbacks?: { onResult?: (resource: any) => void; onError?: (err: string) => void }) => Promise<void>
-  syncSessionState: (projectId: string, sessionId: string, options?: { refreshMessages?: boolean; upstreamSessionId?: string }) => Promise<void>
+  syncSessionState: (projectId: string, sessionId: string, options?: { refreshMessages?: boolean; upstreamSessionId?: string; activateUpstream?: boolean; force?: boolean }) => Promise<void>
   getSessionSyncMeta: (projectId: string, sessionId: string) => SessionSyncMeta | undefined
   getSessionSyncStatus: (projectId: string, sessionId: string) => 'idle' | 'syncing' | 'cooldown' | 'error' | 'ready'
   
@@ -109,6 +110,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 初始状态
   loading: false,
   isStreaming: false,
+  streamingBySession: {},
   error: null,
   projects: [],
   currentProject: null,

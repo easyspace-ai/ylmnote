@@ -9,7 +9,7 @@ import { useState, useCallback } from 'react'
 import { cn } from '@/utils'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import type { ChatMessage, MessageStatus } from './types'
-import { Check, Copy, FileText, RefreshCw, User, Bot } from 'lucide-react'
+import { Check, Copy, FileText, RefreshCw, User } from 'lucide-react'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -56,7 +56,7 @@ function StatusIndicator({ status }: { status?: MessageStatus }) {
 
   return (
     <div className={cn(
-      'flex items-center gap-2 text-xs mb-2.5 pb-2.5 border-b',
+      'mb-2.5 flex items-center gap-2 border-b border-zinc-200 pb-2.5 text-xs dark:border-white/10',
       config.borderClass
     )}>
       <div className={cn(
@@ -92,14 +92,15 @@ function MessageActions({
   }, [content, onCopy])
 
   return (
-    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pl-1">
+    <div className="pl-1 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+      <div className="flex items-center gap-1 rounded-lg">
       <button
         onClick={handleCopy}
         className={cn(
-          'flex items-center gap-1 px-2 py-1 text-[11px] rounded-md transition-colors',
+          'flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors',
           copied
-            ? 'text-emerald-600 bg-emerald-50'
-            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+            ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300'
+            : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white'
         )}
       >
         {copied ? <Check size={10} /> : <Copy size={10} />}
@@ -108,7 +109,7 @@ function MessageActions({
 
       <button
         onClick={() => onSaveAsDocument?.(content)}
-        className="flex items-center gap-1 px-2 py-1 text-[11px] text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
       >
         <FileText size={10} />
         <span>保存</span>
@@ -116,11 +117,12 @@ function MessageActions({
 
       <button
         onClick={() => onRegenerate?.()}
-        className="flex items-center gap-1 px-2 py-1 text-[11px] text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
       >
         <RefreshCw size={10} />
         <span>重试</span>
       </button>
+      </div>
     </div>
   )
 }
@@ -136,14 +138,11 @@ export function MessageBubble({
 
   return (
     <div className={cn('group flex gap-3', isUser ? 'justify-end' : 'justify-start', className)}>
-      {/* AI 头像 */}
       {!isUser && (
         <div className={cn(
-          'flex-shrink-0 w-7 h-7 rounded-lg',
-          'bg-gradient-to-br from-indigo-500 to-violet-600',
-          'flex items-center justify-center shadow-sm'
+          'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-3xl border shadow dark:border-white/15'
         )}>
-          <Bot size={14} className="text-white" />
+          <span className="text-[11px] font-semibold text-zinc-700 dark:text-white">C</span>
         </div>
       )}
 
@@ -156,19 +155,15 @@ export function MessageBubble({
           className={cn(
             'px-4 py-2.5 text-[14px] leading-relaxed',
             isUser
-              ? // 用户消息 - 深色渐变，现代感
-                'bg-gradient-to-br from-slate-800 to-slate-900 text-white rounded-2xl rounded-tr-md shadow-sm'
-              : // AI 消息 - 浅色背景，精致边框
-                'bg-white border border-slate-200/80 text-slate-800 rounded-2xl rounded-tl-md shadow-sm shadow-slate-900/3'
+              ? 'rounded-3xl bg-zinc-100 text-zinc-900 dark:bg-white/10 dark:text-white'
+              : 'rounded-none bg-transparent text-zinc-800 shadow-none dark:text-[#eee]'
           )}
         >
           {isUser ? (
-            // 用户消息内容
             <div className="w-full">
               <MarkdownRenderer content={message.content} />
             </div>
           ) : (
-            // AI 消息内容
             <>
               <StatusIndicator status={message.status} />
               {message.content ? (
@@ -199,14 +194,11 @@ export function MessageBubble({
         )}
       </div>
 
-      {/* 用户头像（可选，保持简洁可省略） */}
       {isUser && (
         <div className={cn(
-          'flex-shrink-0 w-7 h-7 rounded-lg',
-          'bg-gradient-to-br from-slate-400 to-slate-500',
-          'flex items-center justify-center shadow-sm'
+          'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-3xl bg-zinc-800 text-white shadow-sm dark:bg-white/80 dark:text-black'
         )}>
-          <User size={14} className="text-white" />
+          <User size={14} />
         </div>
       )}
     </div>

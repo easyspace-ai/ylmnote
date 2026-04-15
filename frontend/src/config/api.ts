@@ -24,7 +24,6 @@ export const API_ENDPOINTS = {
   chat: '/api/chat',
   chatStream: '/api/chat/stream',
   chatRemoteMessages: '/api/chat/remote-messages',
-  chatUpstreamGate: '/api/chat/upstream-gate',
   chatUpstreamStop: '/api/chat/upstream-stop',
   promptTemplates: '/api/prompt-templates',
   promptTemplate: (id: string) => `/api/prompt-templates/${id}`,

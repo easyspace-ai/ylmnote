@@ -20,7 +20,7 @@
 | **upstream_session_id** | `sessions.upstream_session_id` | 上游 Agent 会话 ID；传给 yilimsdk `ChatRequest.SessionID`、WS `?id=`、HTTP `/api/agents/{id}/...`。 |
 | **upstream_message_id** | `messages.upstream_message_id` | 上游单条消息的稳态 ID，用于 `UpsertByUpstreamID` 去重与增量同步。 |
 
-**不变量**：一个 local session 至多绑定一个 upstream id；若上游返回的 id 与库中已绑定不一致 → `ErrUpstreamSessionConflict`（409）。
+**不变量**：一个 local session 在任意时刻只对应一个 **稳定** upstream id。库内已有 `upstream_session_id` 时，流式结束若 SDK 报告另一 id（W6 首帧 `update.state.id` 常与 `{"id":hint}` 不一致），**保留库内 id**（`upstream_session_binding_ignored_incoming`）；仅当库内为空时写入新绑定。`sync-state` 显式 `upstream_override` 与库内冲突时仍可能 `409`。
 
 ### 2.1 第三条 id、控制台与对账排查
 
@@ -112,7 +112,7 @@ flowchart TB
 | **busy** | `running` / `busy` | 是 | SDK 可用时为 **是** | 远端正在生成；可点「停止」触发 `SendStop`。 |
 | **blocked** | 未知枚举 | 是 | 否 | 保守锁住输入；展示 `detail` 或联系管理员。 |
 | **offline** | （拉取 `/api/agents/{id}` 失败） | 是 | 否 | 网络或上游不可用；轮询降频，避免刷屏。 |
-| **unbound** | `local` / 无 upstream | 视配置 | 否 | 尚无 `upstream_session_id`：若已配置 SDK，首条消息会 **激活并绑定**；若未配置 SDK 且要求绑定，应锁住并提示（后端已有 `Detail` 文案）。 |
+| **unbound** | `local` / 无 upstream | 视配置 | 否 | 尚无 `upstream_session_id`（创建时预绑定失败或未配 SDK）：若已配置 SDK，首条消息会 **激活并绑定**；若未配置 SDK 且要求绑定，应锁住并提示（后端已有 `Detail` 文案）。 |
 
 **与 WebSocket 内 `status` 帧的关系**：流式过程中 SDK 会把上游 `status` 转成 `StreamEventStatus`（如 `busy` / `idle`）透传到 SSE；**门控仍以 `upstream-gate` 的 HTTP 轮询结果为准**校准「是否还能发」，避免仅依赖单次长连接视角。
 
@@ -131,21 +131,51 @@ flowchart TB
 
 任意帧可通过 `state` / `state_delta` / 顶层字段推断 **upstream session id**（`inferUpstreamSessionID`），并与请求中的 hint 比对；不一致时以 debug 日志记录并可能忽略。
 
+**W6 官网 `/run` 握手（`yilimsdk/provider`）**：与浏览器 DevTools 一致——**不再**用 URL `?id=` 传会话 id（见 `buildWSURL`），改为：`auth` →（若已有 upstream id）`{"id":"<upstream_session_id>"}` → 读到带 `state.id` 的 `update` → 再读到一条可接受的 `status`（`w6WaitRunHandshake`）→ 之后 **`EnsureSession` 返回** 或 **`Stream` 才发送 `input`**。若 `update.state.id` 与 hint 不一致，**仍以 hint 为权威**（避免首帧展示他 run id 导致反复换绑）。新会话（hint 空）则使用首包 `update` 中服务端分配的 id。`SendStop` 同样在发 `Stop` 前完成该握手。
+
 ### 6.2 SDK → 后端 SSE → 前端
 
-后端在流开始前发送 `status: connecting_upstream`；结束后发送自定义类型 `session_id`（值为 **local** `result.SessionID`）、`status_clear`、`status: session:{local_session_id}`。
+后端在流开始前发送 `status: connecting_upstream`。
 
-**注意**：handler 里 `session_id` 事件携带的是 **本地会话 id**，不要与 `upstream_session_id` 混淆。
+**握手完成后、首条 `content` 之前**，yilimsdk 会发出 **`upstream_handshake`**（`StreamEventUpstreamHandshake`），`value` 为 JSON 字符串，字段示例：
+
+- `upstream_session_id`：本条 WSS 上解析出的 canonical 上游 id（与 hint 对齐策略见 §6.1）。
+- `handshake_verified`：是否与官方首包 `update.state.id` 对齐（与 `sessions.upstream_verified` 写入策略一致，见应用层）。
+
+其后才是主循环转发的 `content` / `status` / `tool` 等。
+
+**流完全结束后**，[`chat_handler.chatStream`](../backend/internal/interfaces/http/chat_handler.go) 再写入：`session_id`（值为 **local** `result.SessionID`）、`status_clear`、`status: session:{local_session_id}`。
+
+**注意**：
+
+- **`session_id`（末尾）与 `upstream_handshake` 里的 `upstream_session_id` 不是同一概念**：前者是 **local_session_id**（路由/DB 主键）；后者是 **上游 Agent 会话 id**。不要在产品文案或调试里混用。
+- DevTools 里「`session_id` 出现在 `done` 之后」是 **HTTP 层编排**（整段 `Stream` 返回后再写 SSE），**不是** SDK 在 WSS 里晚发 `{"id"}`。WSS 上的 id 与握手在 `streamViaWS` 内、发 `input` 之前已完成。
+
+### 6.3 SSE 与浏览器 DevTools 直连 WSS 的观测差异
+
+| 观测对象 | 你能看到什么 | 说明 |
+|----------|----------------|------|
+| 浏览器 → 上游 `run`（图二） | 原始帧：`auth` → `{"id"}` → `update` / `status` … | 与 yilimsdk 发送顺序一致。 |
+| 浏览器 → 本应用 `POST /api/chat/stream`（SSE） | 仅后端**转发**的 `StreamEvent`；握手阶段在 SDK 内消费，**不会**以原始 WSS 帧出现。 | 因此 SSE 里不会复刻「先两条下行再 input」的视觉顺序；**`upstream_handshake`** 用于在应用层标记「握手已结束、canonical upstream id 已知」。 |
+| 双连接 | `activateUpstreamSession` 内可能已 `EnsureSession`（短 WSS）；随后 **`Stream` 再建第二条 WSS** 并再次握手再发 `input`。 | 与单页长连相比多一次建连；若上游对并发敏感需用日志与上游侧一起排查。 |
 
 ---
 
 ## 7. 会话生命周期（创建、激活、停止、再激活）
 
+### 7.0 创建会话与上游预绑定（`POST .../sessions`）
+
+[`project.Service.CreateSession`](backend/internal/application/project/service.go) 在落库前：若注入了 **AI SDK**（`aiSDK != nil`），会调用 `allocateUpstreamSessionID`（内部即 `EnsureSession("")`）向网关 **预占一条** `upstream_session_id` 并写入新行。此后首条 `chat/stream` 的 `prepareSessionAndSaveUserMessage` 会读出非空 hint，`activateUpstreamSession` 走 **resume**（`EnsureSession(已有 id)`），减少「首条流未结束就刷新 → 库里仍无 upstream → 再发又新开网关会话」的窗口。
+
+**回退（与旧版兼容）**：无 SDK、或 `EnsureSession` 失败（网络/上游不可用）时，**仍创建本地会话**，`upstream_session_id` 保持 **NULL**；日志 `[project] CreateSession eager upstream bind skipped`。首条聊天行为与改造前一致（`EnsureSession("")` 再绑定）。列表/详情响应里 `upstream_session_id` 字段已随 [`toSessionResponse`](backend/internal/interfaces/http/project_handler.go) 返回，便于与控制台对账。
+
 ### 7.1 总览状态机（逻辑视图）
 
 ```mermaid
 stateDiagram-v2
-  [*] --> LocalOnly: 创建 local Session\nupstream 为空
+  [*] --> LocalOrBound: POST 创建会话\nCreateSession
+  LocalOrBound --> BoundReady: SDK 预占成功\n行上已有 upstream
+  LocalOrBound --> LocalOnly: 无 SDK 或预占失败\nupstream 为空
   LocalOnly --> Activating: 首次 Chat/Stream\nsdkClient.EnsureSession("")
   Activating --> BoundReady: 绑定 upstream + waitReady OK
   BoundReady --> Streaming: WS Stream 进行中
@@ -179,7 +209,7 @@ stateDiagram-v2
 
 - **`sync-state` 始终按库内 `upstream_session_id` 拉 HTTP**（[`SyncSessionState`](../backend/internal/application/chat/service.go)）；绑定错了就会整段拉错会话，与你在另一界面看到的「正确」会话永远对不齐。
 - **纠正方式**：优先在业务上 **新建本地会话** 再对话；若必须保留本地 `sessions.id`，可调用已存在的 **`PATCH /api/projects/:project_id/sessions/:session_id/upstream`**（[`bindSessionUpstream`](../backend/internal/interfaces/http/project_handler.go)）将 `upstream_session_id` 显式改成与上游一致的唯一 id。改后应再执行一次 `sync-state` 并 `refreshMessages`。
-- **与 409 的关系**：若流式结束返回的 upstream 与库内已绑定不一致，[`ensureUpstreamSessionBinding`](../backend/internal/application/chat/service.go) 会报 `ErrUpstreamSessionConflict`，前端应将会话标为 terminal 并引导新建会话，而不是继续混用两条 id。
+- **与 409 的关系**：流式结束若 SDK 报告 id 与库内已绑定不一致，[`ensureUpstreamSessionBinding`](../backend/internal/application/chat/service.go) **保留库内**（`upstream_session_binding_ignored_incoming`）；`409` 主要出现在 `sync-state` **显式 override** 与库内冲突时。
 
 ---
 
@@ -255,7 +285,7 @@ flowchart LR
 | 上游 API Key 无效 | SDK `unauthorized` | 检查后端 `AI_SDK_*` / 上游 key；不可重试。 |
 | 限流 / 5xx / 网络 | SDK `rate_limited` / `upstream_5xx` / `transport` | 依赖 `client` 内重试；仍失败则 toast + 退避。 |
 | `EnsureSession` 无法解析 id | `protocol_error` | 检查上游 WS 首包是否含 `state.id` 等；或 fallback HTTP 校验。 |
-| 本地已绑定 A，上游返回 B | `409 Conflict` / `ErrUpstreamSessionConflict` | **Terminal**：提示用户会话绑定损坏，新建会话或 PATCH 绑定。 |
+| 本地已绑定 A，流式完成报告 B | **保留 A**（忽略 B，打 `upstream_session_binding_ignored_incoming`）；首绑仍仅当库内为空时写入。 |
 | 需要 upstream 但未绑定 | `400` / `ErrUpstreamSessionUnbound` | 不应在「无 sdk 且未绑定」时发消息；首条消息前等待激活完成。 |
 | Stop 不支持 | `501` / `503` | 隐藏停止按钮或降级为「仅本地停止 SSE」。 |
 | `waitReady` 超时 | 聊天返回错误 | 展示上游未就绪；可提供重试，记录 `upstream_session_id`。 |
@@ -270,7 +300,7 @@ flowchart LR
 2. **帧类型 schema**：建议增加可选 JSON Schema 或生成类型，区分「网关变体」，减少 `inferUpstreamSessionID` 只靠启发式的风险。
 3. **Update 非前缀增长**：当前策略是「首段可见、最终以快照为准」；可考虑向上层暴露 `snapshot` 事件，让前端用整段替换而非只追加。
 4. **与 HTTP 对齐**：`SendStop` / `Stream` / `EnsureSession` 共享连接池或 trace id，便于日志关联 `local_session_id`（需在 backend 传参扩展，属后续工作）。
-5. **SSE 与 WS 事件对齐表**：维护一张表映射 `StreamEventType` ↔ 上游 `type`，便于第三方对照。
+5. **SSE 与 WS 事件对齐表**：维护一张表映射 `StreamEventType` ↔ 上游 `type`；应用层已增加 `upstream_handshake`（握手完成、canonical upstream id），便于第三方对照。
 
 ---
 
@@ -283,6 +313,7 @@ flowchart LR
 | 流式类型 | `yilimsdk/types/types.go` |
 | SSE 写出 | `yilimsdk/stream/sse.go` |
 | Chat 业务与同步 | `backend/internal/application/chat/service.go`（`slog`：`upstream_session_binding` / `upstream_session_binding_conflict` / `sync_session_state_skip` / `sync_session_state_done`） |
+| 项目与会话创建（含预绑定上游） | `backend/internal/application/project/service.go`（`CreateSession` / `allocateUpstreamSessionID`）、`backend/internal/interfaces/http/project_handler.go`（`createSession`） |
 | HTTP 路由 | `backend/internal/interfaces/http/chat_handler.go` |
 | 前端会话消息 / 流式 / sync | `frontend/src/stores/chatConversationSlice.ts` |
 | 前端项目级 store | `frontend/src/stores/apiStore.ts` |
@@ -298,3 +329,6 @@ flowchart LR
 | 2026-04-15 | 初版：整合 `THIRD_PARTY_INTEGRATION.md` 与当前 yilimsdk / chat / 前端实现。 |
 | 2026-04-15 | 对齐前端：`getSessionMessages` 为主列表、`useUpstreamGate`、流式 Abort、`chatConversationSlice`；更新 §8–§9 与代码索引。 |
 | 2026-04-15 | 增补 §2.1 三条 id 与 SQLite 对账、§7.4 错误绑定与 PATCH upstream、§8.1.1 timeline 与流式草稿差异说明；后端绑定/sync 增加结构化日志（见 `chat.Service`）。 |
+| 2026-04-15 | §7.0：`CreateSession` 在配置 SDK 时预占 `upstream_session_id`；失败时仍创建仅本地会话；§7.1 状态机同步。 |
+| 2026-04-15 | §6：W6 官网握手顺序（auth → `{"id"}` → update+status → input）；`yilimsdk` 移除 WS URL `?id=`。 |
+| 2026-04-15 | §6.2–§6.3：SSE 与浏览器 WSS 观测差异、双连接、`session_id`（末尾）为 **local**；新增 SSE 事件 **`upstream_handshake`**（握手后、content 前）；空 hint 时 `[sdk-w6]` / `[chat]` 日志说明。 |

@@ -52,17 +52,16 @@ export function AttachmentList({
         <div
           key={attachment.id}
           className={cn(
-            'flex items-center gap-1.5 px-2.5 py-1.5',
-            'bg-indigo-50/80 border border-indigo-100',
-            'text-xs text-indigo-700 rounded-lg',
+            'flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5',
+            'border-zinc-200 bg-zinc-100/80 text-xs text-zinc-700',
             'group transition-all duration-200',
-            'hover:bg-indigo-100 hover:border-indigo-200'
+            'hover:border-zinc-300 hover:bg-zinc-100 dark:border-white/10 dark:bg-white/5 dark:text-white/80 dark:hover:border-white/20 dark:hover:bg-white/10'
           )}
         >
           {getAttachmentIcon(attachment.type)}
           <span className="truncate max-w-[100px] font-medium">{attachment.name}</span>
           {attachment.size && (
-            <span className="text-indigo-400 text-[10px]">{formatSize(attachment.size)}</span>
+            <span className="text-[10px] text-zinc-400 dark:text-white/50">{formatSize(attachment.size)}</span>
           )}
           {onRemove && (
             <button
@@ -70,7 +69,7 @@ export function AttachmentList({
               className={cn(
                 'p-0.5 ml-0.5 rounded transition-all duration-200',
                 'opacity-60 hover:opacity-100',
-                'hover:bg-indigo-200/50'
+                'hover:bg-zinc-200/80 dark:hover:bg-white/10'
               )}
             >
               <X size={10} />

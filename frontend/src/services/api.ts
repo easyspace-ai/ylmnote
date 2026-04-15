@@ -484,30 +484,16 @@ export const chatApi = {
       signal?.removeEventListener('abort', cancelByCaller)
     }
   },
-  syncState: (data: { projectId: string; sessionId: string; upstreamSessionId?: string }) =>
+  syncState: (data: { projectId: string; sessionId: string; upstreamSessionId?: string; activateUpstream?: boolean }) =>
     request<{ artifact_count: number; todo_count: number }>(`${API_ENDPOINTS.chat}/sync-state`, {
       method: 'POST',
       body: JSON.stringify({
         project_id: data.projectId,
         session_id: data.sessionId,
         upstream_session_id: data.upstreamSessionId,
+        activate_upstream: Boolean(data.activateUpstream),
       }),
     }),
-
-  getUpstreamGate: (data: { projectId: string; sessionId: string }) => {
-    const q = new URLSearchParams({
-      project_id: data.projectId,
-      session_id: data.sessionId,
-    })
-    return request<{
-      upstream_session_id: string
-      status: string
-      phase: string
-      input_locked: boolean
-      can_stop: boolean
-      detail?: string
-    }>(`${API_ENDPOINTS.chatUpstreamGate}?${q.toString()}`)
-  },
 
   stopUpstream: (data: { projectId: string; sessionId: string }) =>
     request<{ ok: boolean }>(API_ENDPOINTS.chatUpstreamStop, {

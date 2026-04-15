@@ -16,7 +16,7 @@ interface ChatInputProps {
   isStreaming?: boolean
   /** 远端未连接 / busy / blocked 时锁定输入 */
   upstreamLocked?: boolean
-  /** @deprecated 停止已合并到发送位：流式时用 onStop；保留仅为兼容 */
+  /** 远端 Agent 可 Stop（无本地流时也要显示方块按钮） */
   canStop?: boolean
   stoppingUpstream?: boolean
   /** 流式生成中点击「停止」：应中止本地 SSE 并视情况通知上游 */
@@ -34,7 +34,7 @@ export function ChatInput({
   disabled = false,
   isStreaming = false,
   upstreamLocked = false,
-  canStop: _canStop = false,
+  canStop = false,
   stoppingUpstream = false,
   onStop,
   className,
@@ -42,6 +42,8 @@ export function ChatInput({
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const composeLocked = disabled || isStreaming || upstreamLocked
+  /** 本地流式中，或远端 busy 且门控允许 Stop（刷新后进会话场景） */
+  const showStopButton = Boolean(onStop) && (isStreaming || canStop)
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -70,6 +72,7 @@ export function ChatInput({
     <div className={cn('flex items-end gap-2', className)}>
       <textarea
         ref={textareaRef}
+        data-ai-chat-input
         value={value}
         onChange={handleInput}
         onKeyDown={handleKeyDown}
@@ -78,29 +81,34 @@ export function ChatInput({
         autoFocus={autoFocus}
         rows={1}
         className={cn(
-          'flex-1 bg-transparent resize-none outline-none text-sm',
-          'text-gray-900 placeholder-gray-400 leading-6',
+          'h-12 max-h-40 flex-1 resize-none bg-transparent p-3.5 text-sm outline-none',
+          'text-zinc-900 placeholder:text-zinc-400 leading-6 dark:text-white dark:placeholder:text-white/50',
           'min-h-[24px] max-h-[240px] overflow-y-auto',
           composeLocked && 'opacity-50 cursor-not-allowed'
         )}
-        style={{ height: '24px' }}
+        style={{ height: '48px' }}
       />
 
-      {isStreaming && onStop ? (
+      {showStopButton ? (
         <button
           type="button"
-          title={stoppingUpstream ? '正在停止…' : '停止生成'}
-          onClick={() => void onStop()}
+          title={
+            stoppingUpstream
+              ? '正在停止…'
+              : isStreaming
+                ? '停止生成'
+                : '停止远端运行'
+          }
+          onClick={() => void onStop?.()}
           disabled={stoppingUpstream}
           className={cn(
-            'flex-shrink-0 flex items-center justify-center',
-            'w-8 h-8 rounded-lg transition-all duration-200',
+            'm-2 flex size-8 shrink-0 items-center justify-center rounded-full transition-all duration-200',
             stoppingUpstream
-              ? 'bg-rose-100 text-rose-300 cursor-wait'
-              : 'bg-rose-600 text-white hover:bg-rose-700'
+              ? 'cursor-wait bg-rose-100 text-rose-300 dark:bg-rose-300/20'
+              : 'bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-white/90'
           )}
         >
-          <Square size={12} fill="currentColor" className="text-white" />
+          <Square size={10} fill="currentColor" className={cn(stoppingUpstream ? 'text-rose-400' : 'text-current')} />
         </button>
       ) : (
         <button
@@ -108,11 +116,10 @@ export function ChatInput({
           onClick={onSend}
           disabled={composeLocked || !value.trim()}
           className={cn(
-            'flex-shrink-0 flex items-center justify-center',
-            'w-8 h-8 rounded-lg transition-all duration-200',
+            'm-2 flex size-8 shrink-0 items-center justify-center rounded-full transition-all duration-200',
             value.trim() && !composeLocked
-              ? 'bg-gray-900 text-white hover:bg-gray-800'
-              : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              ? 'bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-black'
+              : 'cursor-not-allowed bg-zinc-200 text-zinc-400 dark:bg-white/10 dark:text-white/30'
           )}
         >
           <Send size={14} />

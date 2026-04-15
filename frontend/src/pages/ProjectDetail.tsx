@@ -10,13 +10,12 @@ import { cn } from '@/utils'
 import { useToast } from '@/components/ui/Feedback'
 
 import AIChatBoxNew, { type ChatMessage, type Skill, type Attachment } from '@/components/AIChatBoxNew'
+import type { MessageStatus } from '@/components/ai-elements'
 import { ProjectHeader } from '@/components/project-detail/ProjectHeader'
 import { LeftPane } from '@/components/project-detail/LeftPane'
 import { RightStudioPane } from '@/components/project-detail/RightStudioPane'
 import { useAppStore } from '@/stores/apiStore'
 import { queryClient } from '@/lib/queryClient'
-import { useSessionSync } from '@/hooks/useSessionSync'
-import { useUpstreamGate } from '@/hooks/useUpstreamGate'
 import { useSidebarStore } from '@/components/layout/Sidebar'
 import { chatApi, projectApi } from '@/services/api'
 import { useQueryClient } from '@tanstack/react-query'
@@ -119,9 +118,6 @@ export default function ProjectDetail() {
     sendMessageStream,
     abortActiveMessageStream,
     sendW6PageFromOutlineStream,
-    syncSessionState,
-    getSessionSyncMeta,
-    isStreaming,
     resources,
     fetchResources,
     createResource,
@@ -135,6 +131,9 @@ export default function ProjectDetail() {
   } = useAppStore()
   const promptTemplates = useAppStore((state) => state.promptTemplates)
   const fetchPromptTemplates = useAppStore((state) => state.fetchPromptTemplates)
+  const isStreaming = useAppStore((state) =>
+    Boolean(urlSessionId && state.streamingBySession?.[urlSessionId])
+  )
   
   const [activeMainTab, setActiveMainTab] = useState<MainTabType>('chat')
   const [viewingResource, setViewingResource] = useState<{id: string, name: string, type?: string, content?: string, url?: string | null} | null>(null)
@@ -145,6 +144,8 @@ export default function ProjectDetail() {
   const [activeResourceTab, setActiveResourceTab] = useState<ResourceType>('documents')
   const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null)
   const [activeStudioTool, setActiveStudioTool] = useState<string | null>(null)
+  /** 点击 Studio 技能时仅填入输入框，用 seq 触发子组件同步 */
+  const [studioInputPrefill, setStudioInputPrefill] = useState<{ seq: number; text: string } | null>(null)
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false)
   const [leftWidth, setLeftWidth] = useState(280)
   const [isRightCollapsed, setIsRightCollapsed] = useState(false)
@@ -218,11 +219,21 @@ export default function ProjectDetail() {
   useEffect(() => {
     if (!id || urlSessionId) return
     let cancelled = false
+    const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
     const run = async () => {
       await fetchProject(id)
       await fetchSessions(id)
       if (cancelled) return
-      const sessList = useAppStore.getState().sessions
+      let sessList = useAppStore.getState().sessions
+      // 后端会异步创建默认会话；给一点时间避免前端兜底创建导致“双会话”。
+      if (sessList.length === 0) {
+        for (let i = 0; i < 3 && !cancelled; i++) {
+          await sleep(250)
+          await fetchSessions(id)
+          sessList = useAppStore.getState().sessions
+          if (sessList.length > 0) break
+        }
+      }
       const lastSessionId = localStorage.getItem(getLastSessionStorageKey(id))
       const preferredSession =
         (lastSessionId && sessList.find(s => s.id === lastSessionId)) || sessList[0]
@@ -243,18 +254,25 @@ export default function ProjectDetail() {
     return () => { cancelled = true }
   }, [id, urlSessionId, fetchProject, fetchSessions, createSession, navigate])
 
-  // 会话路由切换：先中止流、切激活会话；消息走 fetchMessagesBySession（先读 localStorage 再拉本地 DB），避免仅 hydrate 与远端/落库长期不一致。
+  // 会话路由切换：切激活会话；先拉会话列表（含 upstream_session_id）再拉消息，保证 localStorage 缓存与当前上游 id 对齐后再读缓存。
   useEffect(() => {
-    abortActiveMessageStream()
     setActiveMessageSession(urlSessionId)
     if (id && urlSessionId) {
-      void fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
+      void (async () => {
+        await fetchSessions(id)
+        await fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
+        // 后端会在对话完成后异步回填 timeline；延迟再拉一次确保切回会话时拿到完整历史。
+        window.setTimeout(() => {
+          if (useAppStore.getState().activeMessageSessionId !== urlSessionId) return
+          void fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
+        }, 1200)
+      })()
     } else if (urlSessionId) {
       clearSessionMessages(urlSessionId)
     } else {
       clearSessionMessages()
     }
-  }, [id, urlSessionId, abortActiveMessageStream, setActiveMessageSession, fetchMessagesBySession, clearSessionMessages])
+  }, [id, urlSessionId, setActiveMessageSession, fetchSessions, fetchMessagesBySession, clearSessionMessages])
 
   useEffect(() => {
     return () => {
@@ -276,10 +294,6 @@ export default function ProjectDetail() {
         fetchPromptTemplates(),
         fetchInstalledSkills(),
       ])
-        .then(async () => {
-          // 资源与会话列表就绪后再 sync：把上游产物/时间线写入本地 DB，并 refreshMessages（避免与 useSessionSync 首帧 inFlight 竞态导致跳过刷新）
-          await useAppStore.getState().syncSessionState(id, urlSessionId, { refreshMessages: true })
-        })
         .finally(() => {
           setIsInitializing(false)
           if (autoSendFromState && initialMessage && hasAutoSentForProject.current !== id) {
@@ -302,55 +316,17 @@ export default function ProjectDetail() {
     localStorage.setItem(getLastSessionStorageKey(id), urlSessionId)
   }, [id, urlSessionId])
 
-  const currentSyncMeta = id && urlSessionId ? getSessionSyncMeta(id, urlSessionId) : undefined
-  const isHistoryLoading = Boolean(urlSessionId) && messages.length === 0 && Boolean(
-    isInitializing ||
-    currentSyncMeta?.inFlight ||
-    (!currentSyncMeta?.lastSuccessAt && !currentSyncMeta?.lastError)
-  )
-  useSessionSync({
-    projectId: id,
-    sessionId: urlSessionId,
-    enabled: Boolean(id && urlSessionId),
-    intervalMs: 45_000,
-    refreshMessages: true,
-    skipInitialSync: true,
-    syncSessionState,
-    sessionSyncMeta: currentSyncMeta,
-  })
-
   const queryClient = useQueryClient()
-  const {
-    upstreamGateLoading,
-    upstreamInputLocked,
-    upstreamCanStop,
-    upstreamBannerText,
-    refetchGate,
-  } = useUpstreamGate({
-    projectId: id,
-    sessionId: urlSessionId,
-    enabled: Boolean(id && urlSessionId),
-    isStreaming,
-  })
 
   const [stoppingUpstream, setStoppingUpstream] = useState(false)
-
-  const wasStreamingRef = useRef(false)
-  useEffect(() => {
-    if (wasStreamingRef.current && !isStreaming && id && urlSessionId) {
-      void queryClient.invalidateQueries({ queryKey: ['upstreamGate', id, urlSessionId] })
-    }
-    wasStreamingRef.current = isStreaming
-  }, [isStreaming, id, urlSessionId, queryClient])
 
   const handleUpstreamStop = async () => {
     if (!id || !urlSessionId) return
     setStoppingUpstream(true)
     try {
-      useAppStore.getState().abortActiveMessageStream()
+      useAppStore.getState().abortActiveMessageStream(urlSessionId)
       await chatApi.stopUpstream({ projectId: id, sessionId: urlSessionId })
       addToast('success', '已发送停止指令')
-      await refetchGate()
     } catch (e: any) {
       addToast('error', e?.message || '停止失败')
     } finally {
@@ -381,10 +357,6 @@ export default function ProjectDetail() {
   // 发送消息
   const handleSendMessage = async (message: string, mode: string, skillId: string | null, attachments: Attachment[], model?: string) => {
     if (!id) return
-    if (upstreamInputLocked) {
-      addToast('info', upstreamBannerText || '远端未就绪，请稍候')
-      return
-    }
     const sendingMessage = message
     const resourceRefs: Array<{ id: string; name?: string; type?: string }> = []
     
@@ -472,6 +444,15 @@ export default function ProjectDetail() {
     )
   }
   
+  const mapStreamStatus = (s?: string): MessageStatus | undefined => {
+    if (!s || typeof s !== 'string') return undefined
+    const v = s.toLowerCase()
+    if (v.includes('think') || v.includes('reason')) return 'thinking'
+    if (v.includes('tool')) return 'tool-calling'
+    if (v.includes('stream') || v.includes('generat') || v.includes('输出')) return 'streaming'
+    return 'streaming'
+  }
+
   // 消息转换
   const chatMessages: ChatMessage[] = messages.map(m => ({
     // 兼容后端回传的 process 元信息，先在现有聊天组件里渲染“思考/过程”折叠块。
@@ -487,7 +468,12 @@ export default function ProjectDetail() {
     id: m.id,
     role: (m.role === 'system' ? 'assistant' : m.role) as 'user' | 'assistant',
     content: m.content,
-    thinkingTime: m.role === 'assistant' ? 1 : undefined
+    upstreamKind:
+      typeof (m.attachments as any)?.upstream_kind === 'string'
+        ? String((m.attachments as any).upstream_kind)
+        : undefined,
+    thinkingTime: undefined,
+    status: m.role === 'assistant' ? mapStreamStatus(m.status) : undefined,
   }))
   const currentSessionPagination = urlSessionId ? messagePagination[urlSessionId] : undefined
   
@@ -682,11 +668,7 @@ export default function ProjectDetail() {
     }
   })
 
-  const runStudioTool = async (tool: (typeof studioTools)[number]) => {
-    if (upstreamInputLocked) {
-      addToast('info', upstreamBannerText || '远端未就绪，请稍后再试')
-      return
-    }
+  const applyStudioToolPrompt = (tool: (typeof studioTools)[number]) => {
     if (isStreaming) {
       addToast('info', '当前正在生成中，请稍后再试')
       return
@@ -697,8 +679,7 @@ export default function ProjectDetail() {
       addToast('error', `「${tool.label}」未配置提示词`)
       return
     }
-    addToast('info', `正在执行「${tool.label}」`)
-    await handleSendMessage(tool.prompt, 'chat', null, [])
+    setStudioInputPrefill({ text: tool.prompt.trim(), seq: Date.now() })
   }
 
   const resourceTabs = [
@@ -1143,7 +1124,7 @@ export default function ProjectDetail() {
 
         {/* ── 中间对话区 ── */}
         <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-visible rounded-xl border border-gray-100 bg-white shadow-sm">
-          {/* AIChatBox 占满剩余高度；允许纵向溢出以便输入区上方的浮层不被裁切 */}
+          {/* AIChatBoxNew 占满剩余高度；允许纵向溢出以便输入区上方的浮层不被裁切 */}
           <div className="flex flex-1 min-h-0 flex-col overflow-visible">
             {!urlSessionId && id ? (
               <div className="flex-1 flex items-center justify-center">
@@ -1158,16 +1139,17 @@ export default function ProjectDetail() {
               messages={chatMessages}
               todoItems={chatTodoItems}
               studioActions={studioTools}
-              onRunStudioTool={(tool) => void runStudioTool(tool)}
+              onRunStudioTool={(tool) => applyStudioToolPrompt(tool)}
               libraryFiles={libraryFiles}
-              upstreamInputLocked={upstreamInputLocked}
-              upstreamCanStop={upstreamCanStop}
-              upstreamBanner={upstreamBannerText}
+              upstreamInputLocked={false}
+              upstreamCanStop={Boolean(urlSessionId && isStreaming)}
+              upstreamBanner={null}
               stoppingUpstream={stoppingUpstream}
               onUpstreamStop={handleUpstreamStop}
               onSendMessage={handleSendMessage}
               autoSend={false}
-              defaultInputValue={""}
+              defaultInputValue=""
+              inputPrefill={studioInputPrefill ?? undefined}
               onCopy={(content) => navigator.clipboard.writeText(content).then(() => addToast('success', '已复制到剪贴板'))}
               onRegenerate={() => addToast('info', '正在准备重新生成...')}
               onSaveAsDocument={async (content) => {
@@ -1221,8 +1203,8 @@ export default function ProjectDetail() {
                   {studioTools.map(tool => (
                     <button
                       key={tool.id}
-                      onClick={() => void runStudioTool(tool)}
-                      disabled={isStreaming || upstreamInputLocked}
+                      onClick={() => applyStudioToolPrompt(tool)}
+                      disabled={isStreaming}
                       className={cn(
                         'relative flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-left shadow-sm transition-all duration-150',
                         'bg-gradient-to-br',
@@ -1230,7 +1212,7 @@ export default function ProjectDetail() {
                         activeStudioTool === tool.id
                           ? 'ring-2 ring-primary-500/60 shadow-md'
                           : 'hover:shadow-md hover:-translate-y-0.5',
-                        (isStreaming || upstreamInputLocked) && 'opacity-60 cursor-not-allowed'
+                        isStreaming && 'opacity-60 cursor-not-allowed'
                       )}
                     >
                       <span className={cn('truncate', tool.textColor)}>{tool.label}</span>

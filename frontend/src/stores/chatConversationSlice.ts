@@ -3,16 +3,40 @@
  */
 import { projectApi, chatApi } from '@/services/api'
 import type { Message as TMessage } from '@/types'
-import { readSessionMessageCache, writeSessionMessageCache } from '@/stores/api/sessionMessageCache'
 
-let activeChatStreamAbort: AbortController | null = null
+const chatStreamAbortBySession = new Map<string, AbortController>()
 
 /** set/get 使用宽松类型，避免与 zustand AppState 循环依赖 */
 export function createChatConversationSlice(set: (partial: any) => void, get: () => any) {
+  const markSessionStreaming = (sessionId: string | undefined, streaming: boolean) => {
+    if (!sessionId) return
+    set((state: any) => {
+      const next = { ...(state.streamingBySession || {}) } as Record<string, boolean>
+      if (streaming) next[sessionId] = true
+      else delete next[sessionId]
+      return {
+        streamingBySession: next,
+        isStreaming: Object.keys(next).length > 0,
+      }
+    })
+  }
+
   return {
-    abortActiveMessageStream: () => {
-      activeChatStreamAbort?.abort()
-      activeChatStreamAbort = null
+    abortActiveMessageStream: (sessionId?: string) => {
+      if (sessionId) {
+        const ctrl = chatStreamAbortBySession.get(sessionId)
+        if (ctrl) {
+          ctrl.abort()
+          chatStreamAbortBySession.delete(sessionId)
+        }
+        markSessionStreaming(sessionId, false)
+        return
+      }
+      for (const ctrl of chatStreamAbortBySession.values()) {
+        ctrl.abort()
+      }
+      chatStreamAbortBySession.clear()
+      set({ streamingBySession: {}, isStreaming: false })
     },
 
     fetchMessagesBySession: async (
@@ -21,7 +45,8 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       options?: { mode?: 'replaceLatest' | 'prependOlder'; limit?: number }
     ) => {
       const mode = options?.mode || 'replaceLatest'
-      const pageSize = options?.limit || 20
+      // 切会话/刷新时优先一次拉取更多最近消息，避免“看起来没更新”。
+      const pageSize = options?.limit || (mode === 'replaceLatest' ? 200 : 20)
       const isActiveSession = () => get().activeMessageSessionId === sessionId
       const pagination = get().messagePagination[sessionId] || {
         nextSkip: 0,
@@ -34,21 +59,10 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       }
       try {
         if (mode === 'replaceLatest') {
-          const cached = readSessionMessageCache(projectId, sessionId)
           set({ loading: true, error: null })
-          if (cached.length > 0 && isActiveSession()) {
-            set((state: any) => ({
-              messages: cached,
-              messagePagination: {
-                ...state.messagePagination,
-                [sessionId]: {
-                  nextSkip: cached.length,
-                  hasMore: true,
-                  loadingOlder: false,
-                  pageSize,
-                },
-              },
-            }))
+          // 直接走服务端真源：切会话时先清空当前展示，避免旧会话残留。
+          if (isActiveSession()) {
+            set({ messages: [] })
           }
         } else {
           set((state: any) => ({
@@ -68,7 +82,6 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
           return
         }
         if (mode === 'replaceLatest') {
-          writeSessionMessageCache(projectId, sessionId, messages)
           set((state: any) => ({
             messages,
             loading: false,
@@ -84,13 +97,12 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
           }))
           return
         }
-        let mergedForCache: TMessage[] = []
         set((state: any) => {
           const existingIds = new Set(state.messages.map((m: TMessage) => m.id))
           const older = messages.filter((m) => !existingIds.has(m.id))
-          mergedForCache = [...older, ...state.messages]
+          const merged = [...older, ...state.messages]
           return {
-            messages: mergedForCache,
+            messages: merged,
             messagePagination: {
               ...state.messagePagination,
               [sessionId]: {
@@ -103,7 +115,6 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
             },
           }
         })
-        writeSessionMessageCache(projectId, sessionId, mergedForCache)
       } catch (error: any) {
         if (!isActiveSession()) {
           return
@@ -125,14 +136,14 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       }
     },
 
-    hydrateSessionMessagesFromCache: (projectId: string, sessionId: string) => {
-      const cached = readSessionMessageCache(projectId, sessionId)
+    hydrateSessionMessagesFromCache: (_projectId: string, sessionId: string) => {
       set((state: any) => ({
-        messages: cached,
+        // 保留 API 形状兼容旧调用；新策略不再从本地缓存恢复消息。
+        messages: [],
         messagePagination: {
           ...state.messagePagination,
           [sessionId]: {
-            nextSkip: cached.length,
+            nextSkip: 0,
             hasMore: true,
             loadingOlder: false,
             pageSize: state.messagePagination[sessionId]?.pageSize || 20,
@@ -208,22 +219,20 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       resourceRefs?: Array<{ id: string; name?: string; type?: string }>,
       externalAbortSignal?: AbortSignal
     ) => {
-      get().abortActiveMessageStream()
       const streamCtrl = new AbortController()
-      activeChatStreamAbort = streamCtrl
+      let streamKey = sessionId || `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
+      const prev = chatStreamAbortBySession.get(streamKey)
+      if (prev) prev.abort()
+      chatStreamAbortBySession.set(streamKey, streamCtrl)
       const onExternalAbort = () => streamCtrl.abort()
       if (externalAbortSignal) {
         if (externalAbortSignal.aborted) streamCtrl.abort()
         else externalAbortSignal.addEventListener('abort', onExternalAbort)
       }
 
-      set({ isStreaming: true })
+      let visibleSessionId = sessionId
+      markSessionStreaming(visibleSessionId, true)
       let resolvedSessionId = sessionId
-      const persistCache = () => {
-        const sid = resolvedSessionId || sessionId
-        if (!sid) return
-        writeSessionMessageCache(projectId, sid, get().messages as TMessage[])
-      }
       const todoSessionKey = () => resolvedSessionId || sessionId || `${projectId}:pending`
       const userMsg = {
         id: 'temp-' + Date.now(),
@@ -235,7 +244,6 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         created_at: new Date().toISOString(),
       }
       set((state: any) => ({ messages: [...state.messages, userMsg] }))
-      persistCache()
 
       const aiMsgId = 'ai-' + Date.now()
       const aiMsg = {
@@ -247,7 +255,6 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         created_at: new Date().toISOString(),
       }
       set((state: any) => ({ messages: [...state.messages, aiMsg] }))
-      persistCache()
 
       let fullContent = ''
       try {
@@ -257,10 +264,21 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         ) as any) {
           if (chunkEvent.type === 'session_id' && chunkEvent.value) {
             const prevKey = todoSessionKey()
-            resolvedSessionId = chunkEvent.value
+            const nextSessionID = String(chunkEvent.value)
+            if (streamKey !== nextSessionID) {
+              chatStreamAbortBySession.delete(streamKey)
+              streamKey = nextSessionID
+              chatStreamAbortBySession.set(streamKey, streamCtrl)
+            }
+            if (visibleSessionId !== nextSessionID) {
+              markSessionStreaming(visibleSessionId, false)
+              visibleSessionId = nextSessionID
+              markSessionStreaming(visibleSessionId, true)
+            }
+            resolvedSessionId = nextSessionID
             set((state: any) => ({
               messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, session_id: chunkEvent.value } : m
+                m.id === aiMsgId ? { ...m, session_id: nextSessionID } : m
               ),
               liveTodosBySession: (() => {
                 const next = { ...state.liveTodosBySession }
@@ -272,7 +290,6 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
                 return next
               })(),
             }))
-            persistCache()
             continue
           } else if (chunkEvent.type === 'tool') {
             let toolPayload: any = null
@@ -311,6 +328,9 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
               ),
             }))
             continue
+          } else if (chunkEvent.type === 'upstream_handshake') {
+            // WSS 握手完成（auth→id→update/status），早于 content；勿当作文本追加
+            continue
           }
 
           const chunkText = chunkEvent.value || ''
@@ -321,61 +341,56 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
               m.id === aiMsgId ? { ...m, content: fullContent } : m
             ),
           }))
-          persistCache()
 
           onChunk?.(chunkText)
         }
-        set({ isStreaming: false })
+        markSessionStreaming(visibleSessionId, false)
         await get().fetchSessions(projectId)
       } catch (error: any) {
         const aborted =
           error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))
         if (aborted) {
           set((state: any) => ({
-            isStreaming: false,
             messages: state.messages.map((m: TMessage) => {
               if (m.id !== aiMsgId) return m
               const cur = (fullContent || m.content || '').trim()
               return { ...m, content: cur || '（生成已中断）', status: undefined }
             }),
           }))
-          persistCache()
+          markSessionStreaming(visibleSessionId, false)
         } else if (String(error?.message || '').includes('501')) {
           try {
             const resp = await chatApi.send({ message: content, projectId, sessionId, skillId, model, mode, resourceRefs })
             fullContent = resp.content || ''
             set((state: any) => ({
-              isStreaming: false,
               messages: state.messages.map((m: TMessage) =>
                 m.id === aiMsgId ? { ...m, content: fullContent } : m
               ),
             }))
-            persistCache()
+            markSessionStreaming(visibleSessionId, false)
           } catch (e: any) {
-            set({ isStreaming: false, error: e?.message || '发送失败' })
+            markSessionStreaming(visibleSessionId, false)
+            set({ error: e?.message || '发送失败' })
           }
         } else {
           set((state: any) => ({
-            isStreaming: false,
             error: error.message,
             messages: state.messages.map((m: TMessage) =>
               m.id === aiMsgId ? { ...m, content: (fullContent || m.content || '').trim() || '（生成失败）' } : m
             ),
           }))
-          persistCache()
+          markSessionStreaming(visibleSessionId, false)
         }
       } finally {
         if (externalAbortSignal) {
           externalAbortSignal.removeEventListener('abort', onExternalAbort)
         }
-        if (activeChatStreamAbort === streamCtrl) {
-          activeChatStreamAbort = null
+        if (chatStreamAbortBySession.get(streamKey) === streamCtrl) {
+          chatStreamAbortBySession.delete(streamKey)
         }
       }
 
-      if (projectId && resolvedSessionId) {
-        await get().syncSessionState(projectId, resolvedSessionId, { refreshMessages: true })
-      } else if (projectId) {
+      if (projectId) {
         await get().fetchResources(projectId)
       }
     },
@@ -440,18 +455,19 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     syncSessionState: async (
       projectId: string,
       sessionId: string,
-      options?: { refreshMessages?: boolean; upstreamSessionId?: string }
+      options?: { refreshMessages?: boolean; upstreamSessionId?: string; activateUpstream?: boolean; force?: boolean }
     ) => {
       const syncKey = `${projectId}:${sessionId}`
       const now = Date.now()
       const meta = (get().sessionSyncMeta as any)[syncKey]
+      const force = Boolean(options?.force)
       if (meta?.inFlight) {
         return
       }
-      if (meta?.isTerminal) {
+      if (!force && meta?.isTerminal) {
         return
       }
-      if (meta?.lastFailedAt && now - meta.lastFailedAt < 30_000) {
+      if (!force && meta?.lastFailedAt && now - meta.lastFailedAt < 30_000) {
         return
       }
       set((state: any) => ({
@@ -460,7 +476,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
           [syncKey]: {
             inFlight: true,
             lastAttemptAt: now,
-            lastFailedAt: meta?.lastFailedAt,
+            lastFailedAt: force ? undefined : meta?.lastFailedAt,
             lastSuccessAt: meta?.lastSuccessAt,
             lastError: undefined,
             isTerminal: false,
@@ -468,7 +484,12 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         },
       }))
       try {
-        await chatApi.syncState({ projectId, sessionId, upstreamSessionId: options?.upstreamSessionId })
+        await chatApi.syncState({
+          projectId,
+          sessionId,
+          upstreamSessionId: options?.upstreamSessionId,
+          activateUpstream: options?.activateUpstream,
+        })
         await get().fetchSessions(projectId)
         await get().fetchResources(projectId)
         if (options?.refreshMessages) {

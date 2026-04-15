@@ -38,6 +38,8 @@ interface AIChatProps {
   /** 与右侧 Studio 栏一致的动作列表 */
   studioActions?: StudioAction[]
   onRunStudioTool?: (action: StudioAction) => void | Promise<void>
+  /** 将文本写入输入框（不发送），seq 每次变化时应用 */
+  inputPrefill?: { seq: number; text: string }
 
   // 状态
   isStreaming?: boolean
@@ -85,6 +87,7 @@ export function AIChat({
   todoItems = [],
   studioActions = [],
   onRunStudioTool,
+  inputPrefill,
   isStreaming = false,
   isLoadingOlder = false,
   hasMoreOlder = false,
@@ -214,6 +217,27 @@ export function AIChat({
     return () => window.removeEventListener('keydown', onKey)
   }, [showStudioPicker, showResourcePicker])
 
+  useEffect(() => {
+    if (!inputPrefill) return
+    setInputValue(inputPrefill.text)
+    setShowStudioPicker(false)
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const ta = document.querySelector(
+          '[data-ai-chat-input]'
+        ) as HTMLTextAreaElement | null
+        if (!ta) return
+        ta.style.height = 'auto'
+        const maxH = 240
+        ta.style.height = `${Math.min(ta.scrollHeight, maxH)}px`
+        ta.focus()
+        const len = ta.value.length
+        ta.setSelectionRange(len, len)
+      })
+    })
+    return () => cancelAnimationFrame(id)
+  }, [inputPrefill?.seq])
+
   // 处理添加本地文件
   const handleAddLocalFile = useCallback(() => {
     if (upstreamInputLocked || isStreaming) return
@@ -286,11 +310,11 @@ export function AIChat({
       )} */}
 
       {/* 输入区域 */}
-      <div className="border-t border-gray-100 px-4 py-3">
-        <div className="max-w-3xl mx-auto space-y-2">
+      <div className="border-t border-zinc-200/70 bg-white px-4 py-3 dark:border-white/10 dark:bg-[#212121]">
+        <div className="mx-auto max-w-3xl space-y-2">
           {upstreamBanner && (
-            <div className="flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs text-amber-900">
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500 animate-pulse" aria-hidden />
+            <div className="flex items-center gap-2 rounded-xl border border-amber-200/80 bg-amber-50/80 px-3 py-2 text-xs text-amber-900 dark:border-amber-300/20 dark:bg-amber-900/20 dark:text-amber-100">
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500" aria-hidden />
               <span>{upstreamBanner}</span>
             </div>
           )}
@@ -300,7 +324,7 @@ export function AIChat({
           )}
 
           {/* 输入框容器 */}
-          <div className="relative rounded-xl border border-gray-200 bg-white shadow-sm shadow-gray-900/5 overflow-visible focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-300 transition-all duration-200">
+          <div className="relative overflow-visible rounded-3xl border border-zinc-200 bg-white pl-2 shadow-sm transition-all duration-200 focus-within:border-zinc-300 dark:border-none dark:bg-white/5">
             {showStudioPicker && onRunStudioTool && (
               <StudioActionsPopover
                 tools={studioActions}
@@ -319,12 +343,12 @@ export function AIChat({
             )}
 
             {/* 文本输入 */}
-            <div className="px-3 pt-2.5 pb-2 overflow-hidden rounded-xl">
+            <div className="overflow-hidden rounded-3xl px-1 pt-2 pb-2">
               <ChatInput
                 value={inputValue}
                 onChange={handleInputValueChange}
                 onSend={handleSend}
-                placeholder="输入你的问题，按 / 打开 Studio 动作，按 @ 引用资料..."
+                placeholder="Ask anything"
                 disabled={false}
                 isStreaming={isStreaming}
                 upstreamLocked={upstreamInputLocked}
@@ -336,7 +360,7 @@ export function AIChat({
             </div>
 
             {/* 工具栏 */}
-            <div className="flex items-center gap-2 px-3 py-2 border-t border-gray-100 bg-gray-50/50">
+            <div className="flex items-center gap-2 border-t border-zinc-200/70 bg-zinc-50/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
               {/* 附件按钮 */}
               <div className="flex items-center gap-1">
                 <button
@@ -344,10 +368,10 @@ export function AIChat({
                   onClick={handleAddLocalFile}
                   disabled={upstreamInputLocked || isStreaming}
                   className={cn(
-                    'flex items-center gap-1 px-2 py-1 text-xs rounded-md transition-colors',
+                    'flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors',
                     upstreamInputLocked || isStreaming
-                      ? 'text-gray-300 cursor-not-allowed'
-                      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
+                      ? 'cursor-not-allowed text-zinc-300 dark:text-white/30'
+                      : 'text-zinc-500 hover:bg-zinc-200/50 hover:text-zinc-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white'
                   )}
                 >
                   <HardDrive size={12} />
@@ -362,10 +386,10 @@ export function AIChat({
                   }}
                   disabled={upstreamInputLocked || isStreaming}
                   className={cn(
-                    'flex items-center gap-1 px-2 py-1 text-xs rounded-md transition-colors',
+                    'flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors',
                     upstreamInputLocked || isStreaming
-                      ? 'text-gray-300 cursor-not-allowed'
-                      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200/50'
+                      ? 'cursor-not-allowed text-zinc-300 dark:text-white/30'
+                      : 'text-zinc-500 hover:bg-zinc-200/50 hover:text-zinc-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white'
                   )}
                 >
                   <Folder size={12} />
@@ -373,7 +397,7 @@ export function AIChat({
                 </button>
               </div>
 
-              <div className="w-px h-4 bg-gray-200" />
+              <div className="h-4 w-px bg-zinc-200 dark:bg-white/10" />
 
               {/* 模式选择 */}
               {/* <ModeSelector mode={mode} onChange={handleModeChange} /> */}
@@ -390,14 +414,14 @@ export function AIChat({
                 }}
                 disabled={upstreamInputLocked || isStreaming || !onRunStudioTool}
                 className={cn(
-                  'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200',
+                  'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all duration-200',
                   showStudioPicker
-                    ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
-                    : 'border-gray-200 bg-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700',
-                  (!onRunStudioTool || upstreamInputLocked || isStreaming) && 'opacity-50 cursor-not-allowed'
+                    ? 'border-zinc-300 bg-zinc-100 text-zinc-800 dark:border-white/20 dark:bg-white/10 dark:text-white'
+                    : 'border-zinc-200 bg-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 dark:border-white/10 dark:text-white/60 dark:hover:border-white/20 dark:hover:text-white',
+                  (!onRunStudioTool || upstreamInputLocked || isStreaming) && 'cursor-not-allowed opacity-50'
                 )}
               >
-                <Zap size={12} className={showStudioPicker ? 'text-indigo-500' : 'text-gray-400'} />
+                <Zap size={12} className={showStudioPicker ? 'text-zinc-700 dark:text-white' : 'text-zinc-400 dark:text-white/40'} />
                 <span>技能</span>
               </button>
 
