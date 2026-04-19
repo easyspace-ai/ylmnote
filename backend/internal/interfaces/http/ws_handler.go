@@ -28,21 +28,19 @@ var upgrader = websocket.Upgrader{
 
 // WSHandler 处理 WebSocket 代理连接
 type WSHandler struct {
-	sdkClient   *wsdk.Client
-	authSvc     *auth.Service
+	sdkClient    *wsdk.Client
+	authSvc      *auth.Service
 	resourceRepo project.ResourceRepository
 	sessionRepo  project.SessionRepository
-	messageRepo  project.MessageRepository
 }
 
-// NewWSHandler 创建新的 WebSocket 处理器
-func NewWSHandler(sdkClient *wsdk.Client, authSvc *auth.Service, resourceRepo project.ResourceRepository, sessionRepo project.SessionRepository, messageRepo project.MessageRepository) *WSHandler {
+// NewWSHandler 创建新的 WebSocket 处理器（对话内容不落库，见 tryExtractArtifacts 注释）
+func NewWSHandler(sdkClient *wsdk.Client, authSvc *auth.Service, resourceRepo project.ResourceRepository, sessionRepo project.SessionRepository) *WSHandler {
 	return &WSHandler{
 		sdkClient:    sdkClient,
 		authSvc:      authSvc,
 		resourceRepo: resourceRepo,
 		sessionRepo:  sessionRepo,
-		messageRepo:  messageRepo,
 	}
 }
 
@@ -149,6 +147,10 @@ func (h *WSHandler) HandleChat(c *gin.Context) {
 				}
 				return
 			}
+			// 文本消息需要处理 attachments：前端传的是 resource.id，需要转换为 file_id
+			if msgType == websocket.TextMessage && projectID != "" {
+				msg = h.transformInputAttachments(projectID, msg)
+			}
 			if err := upstreamConn.WriteMessage(msgType, msg); err != nil {
 				select {
 				case errCh <- err:
@@ -173,6 +175,93 @@ func (h *WSHandler) resolveProjectIDFromSession(sessionID string) (string, error
 		return "", err
 	}
 	return sess.ProjectID, nil
+}
+
+// transformInputAttachments 将前端 input 消息中的 resource.id 转换为上游需要的 file_id。
+// 前端上传文件后得到 resource 记录，但上游 SDK 需要原始的 file_id。
+func (h *WSHandler) transformInputAttachments(projectID string, rawMsg []byte) []byte {
+	var frame map[string]any
+	if err := json.Unmarshal(rawMsg, &frame); err != nil {
+		slog.Debug("transform_attachments_parse_failed", slog.String("error", err.Error()))
+		return rawMsg
+	}
+	// 只处理 input 类型的消息
+	msgType, _ := frame["type"].(string)
+	if msgType != "input" {
+		return rawMsg
+	}
+	attachmentsRaw, ok := frame["attachments"].([]any)
+	if !ok || len(attachmentsRaw) == 0 {
+		return rawMsg
+	}
+	slog.Info("transform_attachments_start", slog.String("project_id", projectID), slog.Int("count", len(attachmentsRaw)))
+	transformed := make([]string, 0, len(attachmentsRaw))
+	for _, raw := range attachmentsRaw {
+		id, ok := raw.(string)
+		if !ok || id == "" {
+			continue
+		}
+		// 如果已经是 file_ 或 src_ 开头，直接使用
+		if strings.HasPrefix(id, "file_") || strings.HasPrefix(id, "src_") {
+			transformed = append(transformed, id)
+			slog.Debug("transform_attachments_use_direct", slog.String("id", id))
+			continue
+		}
+		// 查询 resource 获取 URL，从中提取 file_id
+		fileID := h.resolveResourceToFileID(projectID, id)
+		if fileID != "" {
+			transformed = append(transformed, fileID)
+			slog.Info("transform_attachments_success", slog.String("resource_id", id), slog.String("file_id", fileID))
+		} else {
+			// 转换失败但保留原始 ID（可能上游能处理）
+			transformed = append(transformed, id)
+			slog.Warn("transform_attachments_failed", slog.String("resource_id", id))
+		}
+	}
+	frame["attachments"] = transformed
+	out, err := json.Marshal(frame)
+	if err != nil {
+		slog.Error("transform_attachments_marshal_failed", slog.String("error", err.Error()))
+		return rawMsg
+	}
+	return out
+}
+
+// resolveResourceToFileID 根据 resource ID 解析出 file_id。
+// 优先从 URL 字段的 "sdk-file:" 或 "/api/source/" 格式提取，失败则返回空字符串。
+func (h *WSHandler) resolveResourceToFileID(projectID, resourceID string) string {
+	if h.resourceRepo == nil {
+		return ""
+	}
+	r, err := h.resourceRepo.GetByID(projectID, resourceID)
+	if err != nil || r == nil {
+		slog.Debug("resolve_resource_not_found", slog.String("project_id", projectID), slog.String("resource_id", resourceID))
+		return ""
+	}
+	// URL 格式: "sdk-file:{file_id}" 或 "source:{file_id}" 或 "/api/source/{file_id}"
+	if r.URL != nil && *r.URL != "" {
+		url := *r.URL
+		if strings.HasPrefix(url, "sdk-file:") {
+			return strings.TrimPrefix(url, "sdk-file:")
+		}
+		if strings.HasPrefix(url, "source:") {
+			return strings.TrimPrefix(url, "source:")
+		}
+		if idx := strings.Index(url, "/api/source/"); idx >= 0 {
+			return strings.TrimPrefix(url[idx:], "/api/source/")
+		}
+	}
+	// 如果 URL 为空或无法解析，尝试从 resource ID 本身推断（如果它已经是 file_ 格式）
+	if strings.HasPrefix(resourceID, "file_") || strings.HasPrefix(resourceID, "src_") {
+		return resourceID
+	}
+	slog.Debug("resolve_resource_url_unrecognized", slog.String("resource_id", resourceID), slog.String("url", func() string {
+		if r.URL == nil {
+			return ""
+		}
+		return *r.URL
+	}()))
+	return ""
 }
 
 // tryExtractArtifacts 从上游消息中异步提取 artifact 并落库。
@@ -253,69 +342,7 @@ func (h *WSHandler) tryExtractArtifacts(projectID, sessionID string, rawMsg []by
 
 		slog.Info("artifact_extract_complete", slog.String("project_id", projectID), slog.Int("resources_found", resourceCount))
 
-		// 5. 保存消息到数据库
-		if messages != nil && h.messageRepo != nil {
-			for _, rawMsg := range messages {
-				msg, ok := rawMsg.(map[string]any)
-				if !ok {
-					continue
-				}
-
-				// 跳过隐藏消息
-				if hidden, ok := msg["hidden"].(bool); ok && hidden {
-					continue
-				}
-
-				// 提取 item_id 作为上游 ID
-				itemID, _ := msg["item_id"].(string)
-				if itemID == "" {
-					continue
-				}
-
-				// 判断角色
-				kind, _ := msg["kind"].(string)
-				role := "assistant"
-				if kind == "from_user" {
-					role = "user"
-				}
-
-				// 从 message_parts 提取文本内容
-				var contentParts []string
-				if parts, ok := msg["message_parts"].([]any); ok {
-					for _, rawPart := range parts {
-						part, ok := rawPart.(map[string]any)
-						if !ok {
-							continue
-						}
-						partType, _ := part["type"].(string)
-						if partType == "text" {
-							if text, ok := part["content"].(string); ok && text != "" {
-								contentParts = append(contentParts, text)
-							}
-						}
-					}
-				}
-
-				content := strings.Join(contentParts, "\n")
-				if content == "" {
-					continue // 跳过空消息
-				}
-
-				// Upsert 消息
-				msgEntity := &project.Message{
-					UpstreamID: &itemID,
-					ProjectID:  projectID,
-					SessionID:  sessionID,
-					Role:       role,
-					Content:    content,
-					CreatedAt:  time.Now().UTC(),
-				}
-
-				if _, err := h.messageRepo.UpsertByUpstreamID(msgEntity); err != nil {
-					slog.Error("message_save_failed", slog.String("upstream_id", itemID), slog.String("error", err.Error()))
-				}
-			}
-		}
+		// 不在此将上游对话写入 messages 表：产品约定聊天为实时展示，不以本地库作会话缓存。
 	}
 
 	// 4. 处理 todos 和会话标题同步

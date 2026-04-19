@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -47,6 +48,7 @@ func (h *ProjectHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 	r.DELETE("/:project_id/sessions/:session_id", h.deleteSession)
 	r.GET("/:project_id/sessions/:session_id/messages", h.listMessagesBySession)
+	r.GET("/:project_id/sessions/:session_id/history", h.getSessionHistory) // 代理上游历史消息
 	// 消息（按项目维度保留兼容；按会话维度用上面）
 	r.GET("/:project_id/messages", h.listMessages)
 	r.POST("/:project_id/messages", h.createMessage)
@@ -648,6 +650,9 @@ func (h *ProjectHandler) uploadFile(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to create resource for upload"})
 		return
 	}
+	// 记录 resource_id 与 file_id 的映射，方便调试附件转换问题
+	log.Printf("[upload] resource created project=%s user=%s resource_id=%s file_id=%s url=%s",
+		projectID, u.ID, r.ID, uploadResp.FileID, url)
 	c.JSON(http.StatusOK, toResourceResponse(r))
 }
 
@@ -1001,4 +1006,65 @@ func (h *ProjectHandler) getArtifactData(ctx context.Context, resource *projectd
 	}
 
 	return nil, "", fmt.Errorf("content not available")
+}
+
+// getSessionHistory GET /api/projects/:project_id/sessions/:session_id/history
+// 代理上游 /api/agents/:session_id/messages 接口，用于前端缓存历史消息
+func (h *ProjectHandler) getSessionHistory(c *gin.Context) {
+	u, ok := GetCurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Not authenticated"})
+		return
+	}
+	projectID := c.Param("project_id")
+	sessionID := c.Param("session_id")
+
+	// 验证项目归属
+	if err := h.svc.EnsureProjectBelongsToUser(projectID, u.ID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "Project not found"})
+		return
+	}
+
+	// 解析分页参数
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	offset, _ := strconv.Atoi(c.Query("offset"))
+	if limit <= 0 || limit > 1000 {
+		limit = 1000 // 最多 1000 条
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// 检查 wsSDK 是否可用
+	if h.wsSDK == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"detail": "SDK client not initialized"})
+		return
+	}
+
+	// 调用上游获取历史消息
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	resp, err := h.wsSDK.AgentMessages(ctx, sessionID, limit, offset)
+	if err != nil {
+		slog.Error("history_fetch_failed",
+			slog.String("project_id", projectID),
+			slog.String("session_id", sessionID),
+			slog.String("user_id", u.ID),
+			slog.String("error", err.Error()),
+		)
+		c.JSON(http.StatusBadGateway, gin.H{"detail": "failed to fetch history from upstream: " + err.Error()})
+		return
+	}
+
+	slog.Info("history_fetched",
+		slog.String("project_id", projectID),
+		slog.String("session_id", sessionID),
+		slog.String("user_id", u.ID),
+		slog.Int("count", len(resp.Messages)),
+		slog.Int("limit", limit),
+		slog.Int("offset", offset),
+	)
+
+	c.JSON(http.StatusOK, resp)
 }

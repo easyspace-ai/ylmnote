@@ -116,7 +116,7 @@ func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
 
 	// WebSocket 代理端点 - 透传前端到上游 SDK 的连接
 	// 注意：不使用 AuthMiddleware，token 从 query 参数获取
-	wsHandler := NewWSHandler(rawSDKClient, authSvc, resourceRepo, sessionRepo, messageRepo)
+	wsHandler := NewWSHandler(rawSDKClient, authSvc, resourceRepo, sessionRepo)
 	api.GET("/ws/chat", wsHandler.HandleChat)
 
 	// 静态文件服务 - 前端集成
