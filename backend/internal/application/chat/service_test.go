@@ -121,45 +121,7 @@ func (p *testProvider) Upload(_ context.Context, _ sdkclient.UploadRequest) (*sd
 
 func (p *testProvider) SendStop(_ context.Context, _ string) error { return nil }
 
-func TestChatInjectsResourceRefs(t *testing.T) {
-	now := time.Now().UTC()
-	projectRepo := &testProjectRepo{
-		projects: map[string]*project.Project{
-			"p1": {ID: "p1", UserID: "u1", CreatedAt: now, UpdatedAt: now},
-		},
-	}
-	sessionRepo := &testSessionRepo{sessions: map[string]*project.Session{}}
-	messageRepo := &testMessageRepo{}
-	resourceRepo := &testResourceRepo{
-		resources: map[string]*project.Resource{
-			"r1": {ID: "r1", ProjectID: "p1", Name: "doc1", Type: "document", Content: strPtr("hello")},
-		},
-	}
-	provider := &testProvider{}
-	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
-	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, nil, 0, sdk, UpstreamSyncConfig{})
-
-	projectID := "p1"
-	result, err := svc.Chat(context.Background(), "u1", ChatInput{
-		Message:   "test message",
-		ProjectID: &projectID,
-		ResourceRefs: []ResourceRefInput{
-			{ID: "r1"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Chat() error = %v", err)
-	}
-	if result.Content != "assistant reply" {
-		t.Fatalf("unexpected chat result: %q", result.Content)
-	}
-	if len(provider.lastReq.ResourceRefs) != 1 {
-		t.Fatalf("expected 1 resource ref, got %d", len(provider.lastReq.ResourceRefs))
-	}
-	if provider.lastReq.ResourceRefs[0].Content != "hello" {
-		t.Fatalf("expected resolved resource content")
-	}
-}
+var errNotFound = &sdktypes.SDKError{Code: sdktypes.ErrBadRequest, Message: "not found"}
 
 func TestGetUpstreamGateUnboundWithSDKUnlocksInput(t *testing.T) {
 	now := time.Now().UTC()
@@ -224,38 +186,3 @@ func TestSyncSessionStateUnboundReturnsEmpty(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 }
-
-func TestChatParsesLegacyResourceReference(t *testing.T) {
-	now := time.Now().UTC()
-	projectRepo := &testProjectRepo{
-		projects: map[string]*project.Project{
-			"p1": {ID: "p1", UserID: "u1", CreatedAt: now, UpdatedAt: now},
-		},
-	}
-	sessionRepo := &testSessionRepo{sessions: map[string]*project.Session{}}
-	messageRepo := &testMessageRepo{}
-	resourceRepo := &testResourceRepo{
-		resources: map[string]*project.Resource{
-			"r2": {ID: "r2", ProjectID: "p1", Name: "note", Type: "note", Content: strPtr("legacy text")},
-		},
-	}
-	provider := &testProvider{}
-	sdk := sdkclient.New(provider, sdkclient.RetryConfig{MaxAttempts: 1})
-	svc := NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, nil, 0, sdk, UpstreamSyncConfig{})
-
-	projectID := "p1"
-	_, err := svc.Chat(context.Background(), "u1", ChatInput{
-		Message:   "please use [ref](resource:r2)",
-		ProjectID: &projectID,
-	})
-	if err != nil {
-		t.Fatalf("Chat() error = %v", err)
-	}
-	if len(provider.lastReq.ResourceRefs) != 1 || provider.lastReq.ResourceRefs[0].ID != "r2" {
-		t.Fatalf("legacy ref not resolved: %#v", provider.lastReq.ResourceRefs)
-	}
-}
-
-var errNotFound = &sdktypes.SDKError{Code: sdktypes.ErrBadRequest, Message: "not found"}
-
-func strPtr(s string) *string { return &s }

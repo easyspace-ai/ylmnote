@@ -37,13 +37,11 @@ func (ProjectModel) TableName() string { return "projects" }
 
 // SessionModel GORM 会话表模型
 type SessionModel struct {
-	ID                string    `gorm:"primaryKey"`
-	ProjectID         string    `gorm:"index;not null"`
-	UpstreamSessionID *string   `gorm:"index"`
-	UpstreamVerified  bool      `gorm:"not null;default:false"`
-	Title             string    `gorm:"not null"`
-	CreatedAt         time.Time `gorm:"not null"`
-	UpdatedAt         time.Time `gorm:"not null"`
+	ID        string    `gorm:"primaryKey"`
+	ProjectID string    `gorm:"index;not null"`
+	Title     string    `gorm:"not null"`
+	CreatedAt time.Time `gorm:"not null"`
+	UpdatedAt time.Time `gorm:"not null"`
 }
 
 func (SessionModel) TableName() string { return "sessions" }

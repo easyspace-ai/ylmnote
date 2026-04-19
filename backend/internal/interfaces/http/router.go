@@ -1,7 +1,6 @@
 package http
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,13 +14,12 @@ import (
 	"github.com/easyspace-ai/ylmnote/internal/application/project"
 	"github.com/easyspace-ai/ylmnote/internal/application/skill"
 	"github.com/easyspace-ai/ylmnote/internal/application/user"
-	w6app "github.com/easyspace-ai/ylmnote/internal/application/w6"
 	"github.com/easyspace-ai/ylmnote/internal/config"
-	"github.com/easyspace-ai/ylmnote/internal/infrastructure/ai"
 	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
 	sdkprovider "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/provider"
 	"github.com/easyspace-ai/ylmnote/internal/infrastructure/persistence"
 	"github.com/gin-gonic/gin"
+	wsdk "ws-chat-tester/sdk"
 )
 
 // Wire 组装路由与依赖（可后续改为 wire/codegen）
@@ -51,51 +49,49 @@ func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
 	resourceRepo := persistence.NewResourceRepository(db)
 	promptTemplateRepo := persistence.NewPromptTemplateRepository(db)
 
-	var aiSDK *sdkclient.Client
-	if cfg.SDK.LegacyMode {
-		aiClient := ai.NewFromEnv()
-		legacyAdapter := ai.NewLegacySDKAdapter(aiClient)
-		aiSDK = sdkclient.New(legacyAdapter, sdkclient.RetryConfig{MaxAttempts: 1})
-	} else {
-		provider := sdkprovider.New(sdkprovider.Config{
-			BaseURL:       cfg.SDK.BaseURL,
-			ServiceAPIKey: cfg.SDK.ServiceAPIKey,
-			UploadPath:    cfg.SDK.UploadPath,
-			Timeout:       time.Duration(cfg.SDK.TimeoutSec) * time.Second,
-			Debug:         cfg.SDK.Debug,
-		})
-		aiSDK = sdkclient.New(provider, sdkclient.RetryConfig{
-			MaxAttempts: cfg.SDK.RetryMax,
-			BaseDelay:   400 * time.Millisecond,
-			Debug:       cfg.SDK.Debug,
-		})
-		if cfg.SDK.Debug {
-			slog.Info("ai_sdk_debug_enabled")
-		}
+	provider := sdkprovider.New(sdkprovider.Config{
+		BaseURL:       cfg.SDK.BaseURL,
+		ServiceAPIKey: cfg.SDK.ServiceAPIKey,
+		UploadPath:    cfg.SDK.UploadPath,
+		Timeout:       time.Duration(cfg.SDK.TimeoutSec) * time.Second,
+		Debug:         cfg.SDK.Debug,
+	})
+	aiSDK := sdkclient.New(provider, sdkclient.RetryConfig{
+		MaxAttempts: cfg.SDK.RetryMax,
+		BaseDelay:   400 * time.Millisecond,
+		Debug:       cfg.SDK.Debug,
+	})
+	if cfg.SDK.Debug {
+		slog.Info("ai_sdk_debug_enabled")
 	}
+
+	// 创建原始 SDK client 供 WebSocket 代理使用
+	rawSDKClient, err := wsdk.NewClient(wsdk.Config{
+		BaseURL: cfg.SDK.BaseURL,
+		APIKey:  cfg.SDK.ServiceAPIKey,
+		Timeout: time.Duration(cfg.SDK.TimeoutSec) * time.Second,
+	})
+	if err != nil {
+		slog.Error("failed to init ws sdk client", slog.Any("err", err))
+	}
+
 	projectSvc := project.NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, promptTemplateRepo, aiSDK)
 
-	// W6 page maker (optional; only active when configured).
-	w6Client := ai.NewW6Client(cfg.W6)
-	w6WS := ai.NewW6WS(cfg.W6)
-	pageMakerSvc := w6app.NewPageMakerService(w6Client, w6WS, resourceRepo)
-	projectHandler := NewProjectHandler(projectSvc, pageMakerSvc, aiSDK)
+	projectHandler := NewProjectHandler(projectSvc, aiSDK, rawSDKClient, resourceRepo)
 	projectsGroup := api.Group("/projects")
 	projectsGroup.Use(AuthMiddleware(authSvc))
 	projectHandler.RegisterRoutes(projectsGroup)
+	// artifact 下载和预览端点
+	projectsGroup.GET("/:project_id/artifacts/:artifactId/download", projectHandler.downloadArtifact)
+	projectsGroup.GET("/:project_id/artifacts/:artifactId/preview", projectHandler.previewArtifact)
 
 	promptTemplateHandler := NewPromptTemplateHandler(projectSvc)
 	promptTemplateGroup := api.Group("/prompt-templates")
 	promptTemplateGroup.Use(AuthMiddleware(authSvc))
 	promptTemplateHandler.RegisterRoutes(promptTemplateGroup)
 
-	chatSvc := chat.NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, userRepo, cfg.ChatCreditCost, aiSDK, chat.UpstreamSyncConfig{
-		BaseURL:       cfg.SDK.BaseURL,
-		ServiceAPIKey: cfg.SDK.ServiceAPIKey,
-		Debug:         cfg.SDK.Debug,
-	})
+	chatSvc := chat.NewService(projectRepo, sessionRepo, messageRepo, resourceRepo, userRepo, cfg.ChatCreditCost, aiSDK, cfg.SDK.Debug)
 
-	fmt.Println("====", cfg.SDK.Debug)
 	chatHandler := NewChatHandler(chatSvc)
 	chatGroup := api.Group("/chat")
 	chatGroup.Use(AuthMiddleware(authSvc))
@@ -117,6 +113,11 @@ func Wire(cfg *config.Config, db *persistence.DB) *gin.Engine {
 	userGroup := api.Group("/user")
 	userGroup.Use(AuthMiddleware(authSvc))
 	userHandler.RegisterRoutes(userGroup)
+
+	// WebSocket 代理端点 - 透传前端到上游 SDK 的连接
+	// 注意：不使用 AuthMiddleware，token 从 query 参数获取
+	wsHandler := NewWSHandler(rawSDKClient, authSvc, resourceRepo, sessionRepo, messageRepo)
+	api.GET("/ws/chat", wsHandler.HandleChat)
 
 	// 静态文件服务 - 前端集成
 	slog.Info("spa_static_root", slog.String("dir", staticRoot()))

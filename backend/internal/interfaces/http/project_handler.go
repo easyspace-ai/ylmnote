@@ -1,29 +1,37 @@
 package http
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/easyspace-ai/ylmnote/internal/application/project"
-	w6app "github.com/easyspace-ai/ylmnote/internal/application/w6"
 	projectdomain "github.com/easyspace-ai/ylmnote/internal/domain/project"
 	sdkclient "github.com/easyspace-ai/ylmnote/internal/infrastructure/ai/gateway/client"
+	"github.com/easyspace-ai/ylmnote/internal/infrastructure/persistence"
 	"github.com/gin-gonic/gin"
+	wsdk "ws-chat-tester/sdk"
 )
+
+// ResourceRepository 资源仓储接口别名
+type ResourceRepository = projectdomain.ResourceRepository
 
 // ProjectHandler 项目/消息/资源/上传 HTTP 处理
 type ProjectHandler struct {
-	svc       *project.Service
-	pageMaker *w6app.PageMakerService
-	aiSDK     *sdkclient.Client
+	svc          *project.Service
+	aiSDK        *sdkclient.Client
+	wsSDK        *wsdk.Client
+	resourceRepo ResourceRepository
 }
 
-func NewProjectHandler(svc *project.Service, pageMaker *w6app.PageMakerService, aiSDK *sdkclient.Client) *ProjectHandler {
-	return &ProjectHandler{svc: svc, pageMaker: pageMaker, aiSDK: aiSDK}
+func NewProjectHandler(svc *project.Service, aiSDK *sdkclient.Client, wsSDK *wsdk.Client, resourceRepo ResourceRepository) *ProjectHandler {
+	return &ProjectHandler{svc: svc, aiSDK: aiSDK, wsSDK: wsSDK, resourceRepo: resourceRepo}
 }
 
 func (h *ProjectHandler) RegisterRoutes(r *gin.RouterGroup) {
@@ -36,7 +44,7 @@ func (h *ProjectHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/:project_id/sessions", h.listSessions)
 	r.POST("/:project_id/sessions", h.createSession)
 	r.PATCH("/:project_id/sessions/:session_id", h.updateSession)
-	r.PATCH("/:project_id/sessions/:session_id/upstream", h.bindSessionUpstream)
+
 	r.DELETE("/:project_id/sessions/:session_id", h.deleteSession)
 	r.GET("/:project_id/sessions/:session_id/messages", h.listMessagesBySession)
 	// 消息（按项目维度保留兼容；按会话维度用上面）
@@ -49,7 +57,6 @@ func (h *ProjectHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.PATCH("/:project_id/resources/:resource_id", h.updateResource)
 	r.DELETE("/:project_id/resources/:resource_id", h.deleteResource)
 	r.POST("/:project_id/upload", h.uploadFile)
-	r.POST("/:project_id/page-from-outline", h.generatePageFromOutline)
 }
 
 func parseSkipLimit(c *gin.Context) (skip, limit int) {
@@ -283,33 +290,6 @@ func (h *ProjectHandler) deleteSession(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Session deleted"})
 }
 
-func (h *ProjectHandler) bindSessionUpstream(c *gin.Context) {
-	u, ok := GetCurrentUser(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Not authenticated"})
-		return
-	}
-	projectID := c.Param("project_id")
-	sessionID := c.Param("session_id")
-	if err := h.svc.EnsureProjectBelongsToUser(projectID, u.ID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "Project not found"})
-		return
-	}
-	var req struct {
-		UpstreamSessionID string `json:"upstream_session_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid request body"})
-		return
-	}
-	sess, err := h.svc.BindSessionUpstreamID(projectID, sessionID, req.UpstreamSessionID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, toSessionResponse(sess))
-}
-
 func (h *ProjectHandler) listMessagesBySession(c *gin.Context) {
 	u, ok := GetCurrentUser(c)
 	if !ok {
@@ -336,13 +316,11 @@ func (h *ProjectHandler) listMessagesBySession(c *gin.Context) {
 
 func toSessionResponse(s *projectdomain.Session) gin.H {
 	return gin.H{
-		"id":                  s.ID,
-		"project_id":          s.ProjectID,
-		"upstream_session_id": s.UpstreamSessionID,
-		"upstream_verified":   s.UpstreamVerified,
-		"title":               s.Title,
-		"created_at":          s.CreatedAt,
-		"updated_at":          s.UpdatedAt,
+		"id":         s.ID,
+		"project_id": s.ProjectID,
+		"title":      s.Title,
+		"created_at": s.CreatedAt,
+		"updated_at": s.UpdatedAt,
 	}
 }
 
@@ -673,21 +651,8 @@ func (h *ProjectHandler) uploadFile(c *gin.Context) {
 	c.JSON(http.StatusOK, toResourceResponse(r))
 }
 
-// generatePageFromOutline 使用 W6 pagemaker 根据项目大纲生成 HTML 页面资源。
-// 请求体可以直接携带 outline 文本，或提供 outline 资源 ID 从现有资源中读取。
-type generatePageRequest struct {
-	Title             string  `json:"title" binding:"required"`
-	KnowledgePoints   string  `json:"knowledge_points"`
-	Outline           *string `json:"outline,omitempty"`
-	OutlineResourceID *string `json:"outline_resource_id,omitempty"`
-}
-
-func (h *ProjectHandler) generatePageFromOutline(c *gin.Context) {
-	if h.pageMaker == nil {
-		c.JSON(http.StatusNotImplemented, gin.H{"detail": "W6 pagemaker is not configured in backend"})
-		return
-	}
-
+// downloadArtifact GET /api/projects/:id/artifacts/:artifactId/download
+func (h *ProjectHandler) downloadArtifact(c *gin.Context) {
 	u, ok := GetCurrentUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Not authenticated"})
@@ -698,88 +663,342 @@ func (h *ProjectHandler) generatePageFromOutline(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "Project not found"})
 		return
 	}
+	artifactID := c.Param("artifactId")
 
-	var req generatePageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid request body"})
+	// 1. 从数据库获取资源记录
+	resource, err := h.resourceRepo.GetByID(projectID, artifactID)
+	if err != nil || resource == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact not found"})
 		return
 	}
 
-	var outlineText string
-	if req.Outline != nil && *req.Outline != "" {
-		outlineText = *req.Outline
-	} else if req.OutlineResourceID != nil && *req.OutlineResourceID != "" {
-		res, err := h.svc.GetResource(projectID, *req.OutlineResourceID)
-		if err != nil || res == nil || res.Content == nil {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "Outline resource not found"})
-			return
-		}
-		outlineText = *res.Content
-	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "outline or outline_resource_id is required"})
-		return
-	}
-
-	ctx := c.Request.Context()
-
-	// Stream progress via SSE when client sends Accept: text/event-stream or ?stream=1
-	streamReq := c.Query("stream") == "1" || strings.Contains(c.GetHeader("Accept"), "text/event-stream")
-	if streamReq {
-		c.Header("Content-Type", "text/event-stream")
-		c.Header("Cache-Control", "no-cache")
-		c.Header("Connection", "keep-alive")
-		c.Header("X-Accel-Buffering", "no")
-		flusher, ok := c.Writer.(http.Flusher)
-		if !ok {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": "streaming not supported"})
-			return
-		}
-		stepMessages := map[string]string{
-			"created_chat":      "已创建对话",
-			"calling_pagemaker": "正在调用 PageMaker 代理...",
-			"waiting_artefact":  "正在生成网页，请稍候...",
-			"got_artefact":      "已生成，正在拉取结果...",
-			"saving":            "正在保存到项目...",
-			"done":              "完成",
-		}
-		sendProgress := func(step string) {
-			msg := stepMessages[step]
-			if msg == "" {
-				msg = step
-			}
-			c.SSEvent("progress", gin.H{"step": step, "message": msg})
-			flusher.Flush()
-		}
-		res, err := h.pageMaker.GeneratePageFromOutline(ctx, projectID, req.Title, req.KnowledgePoints, outlineText, sendProgress)
+	// 2. 如果有文件路径（url 字段以 file: 开头），优先从本地读取
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "file:") {
+		filePath := strings.TrimPrefix(*resource.URL, "file:")
+		// 安全检查：确保文件路径在允许的目录内
+		absPath, err := filepath.Abs(filePath)
 		if err != nil {
-			c.SSEvent("error", gin.H{"detail": err.Error()})
-			flusher.Flush()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid file path"})
 			return
 		}
-		c.SSEvent("result", gin.H{
-			"id":         res.ID,
-			"project_id": res.ProjectID,
-			"type":       res.Type,
-			"name":       res.Name,
-			"content":    res.Content,
-			"created_at": res.CreatedAt,
+		// 读取文件内容
+		data, err := persistence.ReadFileSafe(absPath)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+		// 根据文件扩展名推断 Content-Type
+		contentType := inferContentTypeFromExt(resource.Name)
+
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
+		c.Data(200, contentType, data)
+		return
+	}
+
+	// 3. source: 前缀：尝试从上游 SDK 获取内容
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "source:") {
+		sourceID := strings.TrimPrefix(*resource.URL, "source:")
+		// 优先使用已存储的 content
+		if resource.Content != nil && *resource.Content != "" {
+			contentType := inferContentTypeFromExt(resource.Name)
+			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
+			c.Data(200, contentType, []byte(*resource.Content))
+			return
+		}
+		// 尝试从上游 SDK 获取
+		if h.wsSDK != nil && sourceID != "" {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+			defer cancel()
+			data, contentType, err := h.wsSDK.DownloadSource(ctx, sourceID)
+			if err == nil && len(data) > 0 {
+				c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
+				c.Data(200, contentType, data)
+				return
+			}
+			log.Printf("[downloadArtifact] SDK download failed for source %s: %v", sourceID, err)
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact content not available for source-type resource"})
+		return
+	}
+
+	// 4. sdk-file: 前缀 fallback：如果 content 字段有值，直接返回 content
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "sdk-file:") {
+		if resource.Content != nil && *resource.Content != "" {
+			contentType := inferContentTypeFromExt(resource.Name)
+			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
+			c.Data(200, contentType, []byte(*resource.Content))
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact content not available for sdk-file-type resource"})
+		return
+	}
+
+	// 5. 最后 fallback：如果有 content 字段，直接返回内容
+	if resource.Content != nil && *resource.Content != "" {
+		contentType := inferContentTypeFromExt(resource.Name)
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
+		c.Data(200, contentType, []byte(*resource.Content))
+		return
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "artifact content not available"})
+}
+
+// inferContentTypeFromExt 根据文件扩展名推断 Content-Type
+func inferContentTypeFromExt(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".js":
+		return "application/javascript; charset=utf-8"
+	case ".json":
+		return "application/json; charset=utf-8"
+	case ".txt", ".md":
+		return "text/plain; charset=utf-8"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".webp":
+		return "image/webp"
+	case ".pdf":
+		return "application/pdf"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg":
+		return "audio/ogg"
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".ppt":
+		return "application/vnd.ms-powerpoint"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// previewArtifact GET /api/projects/:id/artifacts/:artifactId/preview
+func (h *ProjectHandler) previewArtifact(c *gin.Context) {
+	u, ok := GetCurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"detail": "Not authenticated"})
+		return
+	}
+	projectID := c.Param("project_id")
+	if err := h.svc.EnsureProjectBelongsToUser(projectID, u.ID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"detail": "Project not found"})
+		return
+	}
+	artifactID := c.Param("artifactId")
+
+	resource, err := h.resourceRepo.GetByID(projectID, artifactID)
+	if err != nil || resource == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact not found"})
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(resource.Name))
+
+	// 1. HTML 类型（.html/.htm）：返回 HTML 内容用于 iframe 加载
+	if ext == ".html" || ext == ".htm" || resource.Type == "html_page" {
+		// 优先从 content 字段返回
+		if resource.Content != nil && *resource.Content != "" {
+			c.Data(200, "text/html; charset=utf-8", []byte(*resource.Content))
+			return
+		}
+		// 从 file: 路径读取
+		if resource.URL != nil && strings.HasPrefix(*resource.URL, "file:") {
+			filePath := strings.TrimPrefix(*resource.URL, "file:")
+			absPath, err := filepath.Abs(filePath)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid file path"})
+				return
+			}
+			data, err := persistence.ReadFileSafe(absPath)
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+				return
+			}
+			c.Data(200, "text/html; charset=utf-8", data)
+			return
+		}
+		// 尝试从 source: 路径通过 SDK 获取
+		if resource.URL != nil && strings.HasPrefix(*resource.URL, "source:") {
+			sourceID := strings.TrimPrefix(*resource.URL, "source:")
+			if h.wsSDK != nil && sourceID != "" {
+				ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+				defer cancel()
+				data, _, err := h.wsSDK.DownloadSource(ctx, sourceID)
+				if err == nil && len(data) > 0 {
+					c.Data(200, "text/html; charset=utf-8", data)
+					return
+				}
+			}
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "HTML content not available"})
+		return
+	}
+
+	// 2. Markdown 类型（.md）：返回原始内容，前端会自行渲染
+	if ext == ".md" {
+		if resource.Content != nil && *resource.Content != "" {
+			c.Data(200, "text/plain; charset=utf-8", []byte(*resource.Content))
+			return
+		}
+		if resource.URL != nil && strings.HasPrefix(*resource.URL, "file:") {
+			filePath := strings.TrimPrefix(*resource.URL, "file:")
+			absPath, err := filepath.Abs(filePath)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid file path"})
+				return
+			}
+			data, err := persistence.ReadFileSafe(absPath)
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+				return
+			}
+			c.Data(200, "text/plain; charset=utf-8", data)
+			return
+		}
+		// 尝试从 source: 路径通过 SDK 获取
+		if resource.URL != nil && strings.HasPrefix(*resource.URL, "source:") {
+			sourceID := strings.TrimPrefix(*resource.URL, "source:")
+			if h.wsSDK != nil && sourceID != "" {
+				ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+				defer cancel()
+				data, _, err := h.wsSDK.DownloadSource(ctx, sourceID)
+				if err == nil && len(data) > 0 {
+					c.Data(200, "text/plain; charset=utf-8", data)
+					return
+				}
+			}
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "Markdown content not available"})
+		return
+	}
+
+	// 3. 图片类型（.png/.jpg/.jpeg/.gif/.svg/.webp）：返回文件内容
+	if isImageExt(ext) {
+		data, contentType, err := h.getArtifactData(c.Request.Context(), resource)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.Data(200, contentType, data)
+		return
+	}
+
+	// 4. 音频类型（.mp3/.wav/.ogg）：返回文件流
+	if isAudioExt(ext) {
+		data, contentType, err := h.getArtifactData(c.Request.Context(), resource)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.Data(200, contentType, data)
+		return
+	}
+
+	// 5. 视频类型（.mp4/.webm）：返回文件流
+	if isVideoExt(ext) {
+		data, contentType, err := h.getArtifactData(c.Request.Context(), resource)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.Data(200, contentType, data)
+		return
+	}
+
+	// 6. PPT/PPTX 类型：不支持预览
+	if ext == ".ppt" || ext == ".pptx" {
+		c.JSON(200, gin.H{
+			"preview_supported": false,
+			"message":           "该文件类型不支持预览，请下载后查看",
 		})
-		flusher.Flush()
 		return
 	}
 
-	res, err := h.pageMaker.GeneratePageFromOutline(ctx, projectID, req.Title, req.KnowledgePoints, outlineText)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to generate page: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"id":         res.ID,
-		"project_id": res.ProjectID,
-		"type":       res.Type,
-		"name":       res.Name,
-		"content":    res.Content,
-		"created_at": res.CreatedAt,
+	// 7. 其他类型：不支持预览
+	c.JSON(200, gin.H{
+		"preview_supported": false,
+		"message":           "该文件类型不支持预览，请下载后查看",
 	})
+}
+
+// isImageExt 检查是否为图片扩展名
+func isImageExt(ext string) bool {
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp":
+		return true
+	}
+	return false
+}
+
+// isAudioExt 检查是否为音频扩展名
+func isAudioExt(ext string) bool {
+	switch ext {
+	case ".mp3", ".wav", ".ogg":
+		return true
+	}
+	return false
+}
+
+// isVideoExt 检查是否为视频扩展名
+func isVideoExt(ext string) bool {
+	switch ext {
+	case ".mp4", ".webm":
+		return true
+	}
+	return false
+}
+
+// getArtifactData 获取 artifact 的数据和 Content-Type
+// 优先从 file: 路径读取，其次从 content 字段获取，最后尝试从上游 SDK 获取 source: 资源
+func (h *ProjectHandler) getArtifactData(ctx context.Context, resource *projectdomain.Resource) ([]byte, string, error) {
+	// 优先从 file: 路径读取
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "file:") {
+		filePath := strings.TrimPrefix(*resource.URL, "file:")
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid file path")
+		}
+		data, err := persistence.ReadFileSafe(absPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("file not found")
+		}
+		return data, inferContentTypeFromExt(resource.Name), nil
+	}
+
+	// 从 content 字段获取
+	if resource.Content != nil && *resource.Content != "" {
+		return []byte(*resource.Content), inferContentTypeFromExt(resource.Name), nil
+	}
+
+	// 尝试从 source: 路径通过 SDK 获取
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "source:") {
+		sourceID := strings.TrimPrefix(*resource.URL, "source:")
+		if h.wsSDK != nil && sourceID != "" {
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			data, contentType, err := h.wsSDK.DownloadSource(ctx, sourceID)
+			if err == nil && len(data) > 0 {
+				return data, contentType, nil
+			}
+		}
+	}
+
+	return nil, "", fmt.Errorf("content not available")
 }

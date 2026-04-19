@@ -72,24 +72,20 @@ func (r *SessionRepository) Delete(id, projectID string) error {
 
 func toSessionModel(s *project.Session) *SessionModel {
 	return &SessionModel{
-		ID:                s.ID,
-		ProjectID:         s.ProjectID,
-		UpstreamSessionID: s.UpstreamSessionID,
-		UpstreamVerified:  s.UpstreamVerified,
-		Title:             s.Title,
-		CreatedAt:         s.CreatedAt,
-		UpdatedAt:         s.UpdatedAt,
+		ID:        s.ID,
+		ProjectID: s.ProjectID,
+		Title:     s.Title,
+		CreatedAt: s.CreatedAt,
+		UpdatedAt: s.UpdatedAt,
 	}
 }
 
 func toSessionEntity(m *SessionModel) *project.Session {
 	return &project.Session{
-		ID:                m.ID,
-		ProjectID:         m.ProjectID,
-		UpstreamSessionID: m.UpstreamSessionID,
-		UpstreamVerified:  m.UpstreamVerified,
-		Title:             m.Title,
-		CreatedAt:         m.CreatedAt,
-		UpdatedAt:         m.UpdatedAt,
+		ID:        m.ID,
+		ProjectID: m.ProjectID,
+		Title:     m.Title,
+		CreatedAt: m.CreatedAt,
+		UpdatedAt: m.UpdatedAt,
 	}
 }

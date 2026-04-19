@@ -22,9 +22,6 @@ export interface Project {
 export interface Session {
   id: string
   project_id: string
-  upstream_session_id?: string | null
-  /** 与上游 WSS 握手确认 update.state.id 与本地 hint 对齐后为 true */
-  upstream_verified?: boolean
   title: string
   created_at: string
   updated_at: string

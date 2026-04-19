@@ -23,6 +23,7 @@ interface MessageListProps {
   messages: ChatMessage[]
   className?: string
   isStreaming?: boolean
+  isLoadingMessages?: boolean
   hasMoreOlder?: boolean
   loadingOlder?: boolean
   todoItems?: Array<{ text: string; done: boolean }>
@@ -36,6 +37,7 @@ export function MessageList({
   messages,
   className,
   isStreaming = false,
+  isLoadingMessages = false,
   hasMoreOlder = false,
   loadingOlder = false,
   onLoadOlder,
@@ -185,12 +187,44 @@ export function MessageList({
         </div>
       ) : (
         /* 空状态 */
-        <div className="flex h-full select-none flex-col items-center justify-center text-center">
-          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-3xl border shadow dark:border-white/15">
-            <span className="text-sm font-semibold text-zinc-700 dark:text-white">C</span>
+        isLoadingMessages ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4">
+            {/* 消息骨架屏效果 */}
+            <div className="w-full max-w-2xl space-y-6 px-4">
+              {/* 模拟助手消息的骨架 */}
+              <div className="flex items-start gap-3">
+                <div className="h-8 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-3/4 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+                  <div className="h-4 w-1/2 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+                </div>
+              </div>
+              {/* 模拟用户消息的骨架 */}
+              <div className="flex items-start gap-3 justify-end">
+                <div className="flex-1 space-y-2 text-right">
+                  <div className="ml-auto h-4 w-1/2 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+                </div>
+                <div className="h-8 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700" />
+              </div>
+              {/* 模拟助手消息的骨架 */}
+              <div className="flex items-start gap-3">
+                <div className="h-8 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-5/6 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+                  <div className="h-4 w-2/3 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+                  <div className="h-4 w-1/3 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+                </div>
+              </div>
+            </div>
           </div>
-          <p className="mb-1 text-xl text-zinc-900 dark:text-white">How can I help you today?</p>
-        </div>
+        ) : (
+          <div className="flex h-full select-none flex-col items-center justify-center text-center">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-3xl border shadow dark:border-white/15">
+              <span className="text-sm font-semibold text-zinc-700 dark:text-white">C</span>
+            </div>
+            <p className="mb-1 text-xl text-zinc-900 dark:text-white">How can I help you today?</p>
+          </div>
+        )
       )}
     </div>
   )

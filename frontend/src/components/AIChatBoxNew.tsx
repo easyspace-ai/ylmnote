@@ -46,6 +46,7 @@ interface AIChatBoxNewProps {
   // 状态
   autoFocus?: boolean
   isStreaming?: boolean
+  isLoadingMessages?: boolean
   hasMoreOlder?: boolean
   loadingOlder?: boolean
   isGeneratingTodos?: boolean
@@ -91,6 +92,7 @@ export default function AIChatBoxNew({
   onLoadOlder,
   autoFocus = false,
   isStreaming = false,
+  isLoadingMessages = false,
   hasMoreOlder = false,
   loadingOlder = false,
   isGeneratingTodos = false,
@@ -149,6 +151,7 @@ export default function AIChatBoxNew({
       studioActions={studioActions}
       onRunStudioTool={onRunStudioTool}
       isStreaming={isStreaming}
+      isLoadingMessages={isLoadingMessages}
       isLoadingOlder={loadingOlder}
       hasMoreOlder={hasMoreOlder}
       isGeneratingTodos={isGeneratingTodos}

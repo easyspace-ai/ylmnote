@@ -14,21 +14,28 @@ import (
 const currentUserKey = "currentUser"
 
 // AuthMiddleware 从 Bearer token 解析用户并注入 context
+// 支持从 Authorization header 或 URL query param "token" 获取 token
 func AuthMiddleware(authSvc *auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 优先从 Authorization header 获取 token
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			log.Printf("[auth] missing Authorization header: %s %s", c.Request.Method, c.Request.URL.Path)
+		token := ""
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				token = parts[1]
+			}
+		}
+		// 如果 header 中没有 token，尝试从 query param 获取
+		if token == "" {
+			token = c.Query("token")
+		}
+		if token == "" {
+			log.Printf("[auth] missing Authorization header or token query param: %s %s", c.Request.Method, c.Request.URL.Path)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"detail": "Missing Authorization header"})
 			return
 		}
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			log.Printf("[auth] invalid Authorization format: %s %s", c.Request.Method, c.Request.URL.Path)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"detail": "Invalid Authorization header"})
-			return
-		}
-		parsed, err := jwt.Parse(parts[1], func(token *jwt.Token) (interface{}, error) {
+		parsed, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
 			if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 				return nil, jwt.ErrTokenSignatureInvalid
 			}

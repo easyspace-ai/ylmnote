@@ -43,6 +43,7 @@ interface AIChatProps {
 
   // 状态
   isStreaming?: boolean
+  isLoadingMessages?: boolean
   isLoadingOlder?: boolean
   hasMoreOlder?: boolean
   isGeneratingTodos?: boolean
@@ -89,6 +90,7 @@ export function AIChat({
   onRunStudioTool,
   inputPrefill,
   isStreaming = false,
+  isLoadingMessages = false,
   isLoadingOlder = false,
   hasMoreOlder = false,
   isGeneratingTodos = false,
@@ -290,6 +292,7 @@ export function AIChat({
       <MessageList
         messages={messages}
         isStreaming={isStreaming}
+        isLoadingMessages={isLoadingMessages}
         hasMoreOlder={hasMoreOlder}
         loadingOlder={isLoadingOlder}
         onLoadOlder={onLoadOlder}

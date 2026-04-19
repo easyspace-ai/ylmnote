@@ -1,42 +1,299 @@
 /**
- * 会话消息、流式对话、sync-state 等与聊天相关的 store 切片（从 apiStore 拆出以减轻单文件体积）。
+ * 会话消息、WebSocket 连接等与聊天相关的 store 切片（从 apiStore 拆出以减轻单文件体积）。
  */
-import { projectApi, chatApi } from '@/services/api'
+import { SessionWebSocket } from '@/services/ws'
+import { projectApi } from '@/services/api'
 import type { Message as TMessage } from '@/types'
 
-const chatStreamAbortBySession = new Map<string, AbortController>()
+/** artifact 刷新防抖定时器 */
+let _artifactRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 上游消息格式定义 */
+interface WSMessagePart {
+  type: string
+  text_kind?: string
+  content?: string
+}
+
+interface WSMessage {
+  turn_number: number
+  item_id: number
+  kind: 'from_user' | 'user_facing' | 'reasoning' | 'internal_thought' | 'episodic_marker' | string
+  message_parts: WSMessagePart[]
+  author_id?: string | null
+  author_display?: string | null
+  created_at?: number
+  hidden?: boolean
+}
+
+interface WSUpdateData {
+  type: 'update'
+  state: {
+    id: string
+    status: string
+    title?: string
+    todos?: Array<{ text: string; done: boolean; children?: any[] }>
+    [key: string]: any
+  }
+  messages: WSMessage[]
+}
+
+interface WSStatusData {
+  type: 'status'
+  status: string
+}
+
+type WSData = WSUpdateData | WSStatusData
+
+/** WebSocket 连接状态 */
+type WSConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
 
 /** set/get 使用宽松类型，避免与 zustand AppState 循环依赖 */
 export function createChatConversationSlice(set: (partial: any) => void, get: () => any) {
-  const markSessionStreaming = (sessionId: string | undefined, streaming: boolean) => {
-    if (!sessionId) return
-    set((state: any) => {
-      const next = { ...(state.streamingBySession || {}) } as Record<string, boolean>
-      if (streaming) next[sessionId] = true
-      else delete next[sessionId]
-      return {
-        streamingBySession: next,
-        isStreaming: Object.keys(next).length > 0,
-      }
-    })
-  }
-
   return {
+    // WebSocket 连接状态
+    wsConnections: {} as Record<string, SessionWebSocket>,
+    wsStatus: {} as Record<string, WSConnectionStatus>,
+    messagesLoadingBySession: {} as Record<string, boolean>,
+
+    // 连接 WebSocket
+    connectWebSocket: (sessionId: string, projectId?: string) => {
+      const state = get()
+      
+      // 如果已有连接，先关闭
+      if (state.wsConnections[sessionId]) {
+        state.wsConnections[sessionId].close()
+      }
+
+      const ws = new SessionWebSocket(sessionId, projectId || state.currentProject?.id || '', {
+        onMessage: (data: WSData) => {
+          // 处理上游 error 类型消息
+          if ((data as any).type === 'error') {
+            set((state: any) => ({
+              error: (data as any).error || '上游连接失败，请稍后重试',
+              isStreaming: false,
+            }));
+            return;
+          }
+
+          // 处理上游消息
+          if (data.type === 'update' && data.messages) {
+            // 转换上游消息格式为本地消息格式
+            const convertedMessages: TMessage[] = data.messages
+              .filter((msg) => !msg.hidden) // 过滤隐藏消息
+              .map((msg) => {
+                // 提取文本内容
+                let content = ''
+                if (msg.message_parts) {
+                  content = msg.message_parts
+                    .filter((part) => part.type === 'text')
+                    .map((part) => part.content || '')
+                    .join('')
+                }
+
+                // 映射 role
+                let role: 'user' | 'assistant' | 'system' = 'assistant'
+                if (msg.kind === 'from_user') {
+                  role = 'user'
+                } else if (msg.kind === 'episodic_marker' || msg.kind === 'system') {
+                  role = 'system'
+                }
+
+                // 映射 messageKind
+                let messageKind = 'normal'
+                if (msg.kind === 'reasoning' || msg.kind === 'internal_thought') {
+                  messageKind = 'reasoning'
+                } else if (msg.kind === 'episodic_marker' || msg.kind === 'system') {
+                  messageKind = 'system'
+                }
+
+                return {
+                  id: String(msg.item_id),
+                  upstream_message_id: String(msg.item_id),
+                  project_id: state.currentProject?.id || '',
+                  session_id: sessionId,
+                  role,
+                  content,
+                  status: data.state?.status || 'idle',
+                  attachments: {
+                    upstream_kind: msg.kind,
+                    message_kind: messageKind,
+                    turn_number: msg.turn_number,
+                  },
+                  created_at: msg.created_at 
+                    ? new Date(msg.created_at * 1000).toISOString() 
+                    : new Date().toISOString(),
+                } as TMessage
+              })
+
+            // 更新消息列表 - 合并而不是替换，保留已有消息
+            set((state: any) => {
+              // 上游 from_user 消息的内容集合，用于去重临时消息
+              const upstreamUserContents = new Set(
+                convertedMessages
+                  .filter((m: TMessage) => m.role === 'user')
+                  .map((m: TMessage) => m.content)
+              )
+
+              // 过滤掉已被上游确认的临时消息（内容相同的 from_user 消息已在上游列表中）
+              const filteredExisting = state.messages.filter(
+                (m: TMessage) => !(m.id.startsWith('temp-') && upstreamUserContents.has(m.content))
+              )
+
+              const existingIds = new Set(filteredExisting.map((m: TMessage) => m.id))
+              const newMessages = convertedMessages.filter((m) => !existingIds.has(m.id))
+
+              // 更新已存在消息的内容（用于流式更新）
+              const updatedMessages = filteredExisting.map((existing: TMessage) => {
+                const updated = convertedMessages.find((m: TMessage) => m.id === existing.id)
+                if (updated && updated.content !== existing.content) {
+                  return { ...existing, content: updated.content, status: updated.status }
+                }
+                return existing
+              })
+
+              return {
+                messages: [...updatedMessages, ...newMessages],
+              }
+            })
+
+            // 更新 todos
+            if (data.state?.todos) {
+              set((state: any) => ({
+                liveTodosBySession: {
+                  ...state.liveTodosBySession,
+                  [sessionId]: data.state.todos,
+                },
+              }))
+            }
+
+            // 检测是否有新的 artifact（resource 类型的 message_parts）或 todos 更新，延迟刷新资源列表
+            const hasNewArtifacts = data.messages.some((msg: WSMessage) =>
+              msg.message_parts?.some((part: WSMessagePart) => part.type === 'resource')
+            )
+            const hasTodosUpdate = data.state?.todos != null
+
+            if (hasNewArtifacts || hasTodosUpdate) {
+              if (_artifactRefreshTimer) clearTimeout(_artifactRefreshTimer)
+              _artifactRefreshTimer = setTimeout(() => {
+                _artifactRefreshTimer = null
+                const projectId = get().currentProject?.id
+                if (projectId) {
+                  get().fetchResources(projectId)
+                }
+              }, 500)
+            }
+          }
+
+          // 处理状态更新
+          if (data.type === 'status') {
+            set((state: any) => ({
+              streamingBySession: {
+                ...state.streamingBySession,
+                [sessionId]: data.status !== 'idle',
+              },
+              isStreaming: data.status !== 'idle',
+            }))
+          }
+        },
+        onStatusChange: (status: string) => {
+          set((state: any) => ({
+            wsStatus: { ...state.wsStatus, [sessionId]: status },
+          }))
+        },
+        onError: (error: Error) => {
+          console.error('WebSocket error:', error)
+          set((state: any) => ({
+            error: error.message,
+            wsStatus: { ...state.wsStatus, [sessionId]: 'disconnected' },
+          }))
+        },
+        onClose: () => {
+          // 连接关闭处理 - ws.ts 会自动重连，这里不需要额外处理
+          console.log('WebSocket closed for session:', sessionId)
+        },
+      })
+
+      ws.connect()
+      set((state: any) => ({
+        wsConnections: { ...state.wsConnections, [sessionId]: ws },
+        wsStatus: { ...state.wsStatus, [sessionId]: 'connecting' },
+      }))
+    },
+
+    // 断开 WebSocket
+    disconnectWebSocket: (sessionId: string) => {
+      const state = get()
+      const ws = state.wsConnections[sessionId]
+      if (ws) {
+        ws.close()
+        set((state: any) => {
+          const newConnections = { ...state.wsConnections }
+          delete newConnections[sessionId]
+          const newStatus = { ...state.wsStatus }
+          delete newStatus[sessionId]
+          return {
+            wsConnections: newConnections,
+            wsStatus: newStatus,
+          }
+        })
+      }
+    },
+
+    // 发送消息（通过 WebSocket）
+    sendMessageWS: (sessionId: string, content: string, attachments: string[] = []) => {
+      const ws = get().wsConnections[sessionId]
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.sendInput(content, attachments)
+
+        // 乐观更新：立即添加用户消息到列表
+        const tempId = `temp-${Date.now()}`
+        const userMsg: TMessage = {
+          id: tempId,
+          project_id: get().currentProject?.id || '',
+          session_id: sessionId,
+          role: 'user',
+          content,
+          resource_refs: attachments.length > 0 ? attachments.map(id => ({ id })) : undefined,
+          attachments: { temp: true },
+          created_at: new Date().toISOString(),
+        }
+
+        set((state: any) => ({
+          messages: [...state.messages, userMsg],
+        }))
+      } else {
+        set({ error: 'WebSocket 未连接，请稍后重试' })
+      }
+    },
+
+    // 中止当前会话的消息流（通过关闭 WebSocket）
     abortActiveMessageStream: (sessionId?: string) => {
       if (sessionId) {
-        const ctrl = chatStreamAbortBySession.get(sessionId)
-        if (ctrl) {
-          ctrl.abort()
-          chatStreamAbortBySession.delete(sessionId)
+        const ws = get().wsConnections[sessionId]
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          // 先发送 Stop 消息到上游
+          ws.sendStop()
         }
-        markSessionStreaming(sessionId, false)
-        return
+        // 断开连接
+        get().disconnectWebSocket(sessionId)
+        set((state: any) => ({
+          streamingBySession: {
+            ...state.streamingBySession,
+            [sessionId]: false,
+          },
+        }))
+      } else {
+        // 中止所有
+        const connections = get().wsConnections
+        Object.values(connections).forEach((ws: any) => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.sendStop()
+          }
+        })
+        Object.keys(get().wsConnections).forEach(sid => get().disconnectWebSocket(sid))
+        set({ streamingBySession: {}, isStreaming: false })
       }
-      for (const ctrl of chatStreamAbortBySession.values()) {
-        ctrl.abort()
-      }
-      chatStreamAbortBySession.clear()
-      set({ streamingBySession: {}, isStreaming: false })
     },
 
     fetchMessagesBySession: async (
@@ -45,7 +302,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       options?: { mode?: 'replaceLatest' | 'prependOlder'; limit?: number }
     ) => {
       const mode = options?.mode || 'replaceLatest'
-      // 切会话/刷新时优先一次拉取更多最近消息，避免“看起来没更新”。
+      // 切会话/刷新时优先一次拉取更多最近消息，避免"看起来没更新"。
       const pageSize = options?.limit || (mode === 'replaceLatest' ? 200 : 20)
       const isActiveSession = () => get().activeMessageSessionId === sessionId
       const pagination = get().messagePagination[sessionId] || {
@@ -57,6 +314,17 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       if (mode === 'prependOlder' && (pagination.loadingOlder || !pagination.hasMore)) {
         return
       }
+
+      // 设置消息加载状态
+      if (mode === 'replaceLatest') {
+        set((state: any) => ({
+          messagesLoadingBySession: {
+            ...state.messagesLoadingBySession,
+            [sessionId]: true,
+          },
+        }))
+      }
+
       try {
         if (mode === 'replaceLatest') {
           set({ loading: true, error: null })
@@ -133,6 +401,15 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
             },
           }))
         }
+      } finally {
+        if (mode === 'replaceLatest') {
+          set((state: any) => ({
+            messagesLoadingBySession: {
+              ...state.messagesLoadingBySession,
+              [sessionId]: false,
+            },
+          }))
+        }
       }
     },
 
@@ -193,6 +470,8 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         }
         set((state: any) => ({ messages: [...state.messages, userMsg] }))
 
+        // 非流式发送（备用方案）
+        const { chatApi } = await import('@/services/api')
         const response = await chatApi.send({
           message: content,
           projectId,
@@ -208,248 +487,14 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       }
     },
 
-    sendMessageStream: async (
-      projectId: string,
-      sessionId: string | undefined,
-      content: string,
-      skillId?: string,
-      onChunk?: (text: string) => void,
-      model?: string,
-      mode?: string,
-      resourceRefs?: Array<{ id: string; name?: string; type?: string }>,
-      externalAbortSignal?: AbortSignal
-    ) => {
-      const streamCtrl = new AbortController()
-      let streamKey = sessionId || `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
-      const prev = chatStreamAbortBySession.get(streamKey)
-      if (prev) prev.abort()
-      chatStreamAbortBySession.set(streamKey, streamCtrl)
-      const onExternalAbort = () => streamCtrl.abort()
-      if (externalAbortSignal) {
-        if (externalAbortSignal.aborted) streamCtrl.abort()
-        else externalAbortSignal.addEventListener('abort', onExternalAbort)
-      }
-
-      let visibleSessionId = sessionId
-      markSessionStreaming(visibleSessionId, true)
-      let resolvedSessionId = sessionId
-      const todoSessionKey = () => resolvedSessionId || sessionId || `${projectId}:pending`
-      const userMsg = {
-        id: 'temp-' + Date.now(),
-        project_id: projectId,
-        session_id: sessionId,
-        role: 'user' as const,
-        content,
-        skill_id: skillId,
-        created_at: new Date().toISOString(),
-      }
-      set((state: any) => ({ messages: [...state.messages, userMsg] }))
-
-      const aiMsgId = 'ai-' + Date.now()
-      const aiMsg = {
-        id: aiMsgId,
-        project_id: projectId,
-        session_id: sessionId,
-        role: 'assistant' as const,
-        content: '',
-        created_at: new Date().toISOString(),
-      }
-      set((state: any) => ({ messages: [...state.messages, aiMsg] }))
-
-      let fullContent = ''
-      try {
-        for await (const chunkEvent of chatApi.stream(
-          { message: content, projectId, sessionId, skillId, model, mode, resourceRefs },
-          streamCtrl.signal
-        ) as any) {
-          if (chunkEvent.type === 'session_id' && chunkEvent.value) {
-            const prevKey = todoSessionKey()
-            const nextSessionID = String(chunkEvent.value)
-            if (streamKey !== nextSessionID) {
-              chatStreamAbortBySession.delete(streamKey)
-              streamKey = nextSessionID
-              chatStreamAbortBySession.set(streamKey, streamCtrl)
-            }
-            if (visibleSessionId !== nextSessionID) {
-              markSessionStreaming(visibleSessionId, false)
-              visibleSessionId = nextSessionID
-              markSessionStreaming(visibleSessionId, true)
-            }
-            resolvedSessionId = nextSessionID
-            set((state: any) => ({
-              messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, session_id: nextSessionID } : m
-              ),
-              liveTodosBySession: (() => {
-                const next = { ...state.liveTodosBySession }
-                const nextKey = todoSessionKey()
-                if (prevKey !== nextKey && next[prevKey] && !next[nextKey]) {
-                  next[nextKey] = next[prevKey]
-                  delete next[prevKey]
-                }
-                return next
-              })(),
-            }))
-            continue
-          } else if (chunkEvent.type === 'tool') {
-            let toolPayload: any = null
-            try {
-              toolPayload = typeof chunkEvent.value === 'string' ? JSON.parse(chunkEvent.value) : chunkEvent.value
-            } catch {
-              toolPayload = null
-            }
-            if (toolPayload?.kind === 'todos' && Array.isArray(toolPayload.todos)) {
-              const todos = toolPayload.todos
-                .map((item: any) => ({
-                  text: String(item?.text || '').trim(),
-                  done: Boolean(item?.done),
-                }))
-                .filter((item: { text: string }) => item.text)
-              const key = todoSessionKey()
-              set((state: any) => ({
-                liveTodosBySession: {
-                  ...state.liveTodosBySession,
-                  [key]: todos,
-                },
-              }))
-            }
-            continue
-          } else if (chunkEvent.type === 'status') {
-            set((state: any) => ({
-              messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, status: chunkEvent.value } : m
-              ),
-            }))
-            continue
-          } else if (chunkEvent.type === 'status_clear') {
-            set((state: any) => ({
-              messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, status: undefined } : m
-              ),
-            }))
-            continue
-          } else if (chunkEvent.type === 'upstream_handshake') {
-            // WSS 握手完成（auth→id→update/status），早于 content；勿当作文本追加
-            continue
-          }
-
-          const chunkText = chunkEvent.value || ''
-          fullContent += chunkText
-
-          set((state: any) => ({
-            messages: state.messages.map((m: TMessage) =>
-              m.id === aiMsgId ? { ...m, content: fullContent } : m
-            ),
-          }))
-
-          onChunk?.(chunkText)
-        }
-        markSessionStreaming(visibleSessionId, false)
-        await get().fetchSessions(projectId)
-      } catch (error: any) {
-        const aborted =
-          error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))
-        if (aborted) {
-          set((state: any) => ({
-            messages: state.messages.map((m: TMessage) => {
-              if (m.id !== aiMsgId) return m
-              const cur = (fullContent || m.content || '').trim()
-              return { ...m, content: cur || '（生成已中断）', status: undefined }
-            }),
-          }))
-          markSessionStreaming(visibleSessionId, false)
-        } else if (String(error?.message || '').includes('501')) {
-          try {
-            const resp = await chatApi.send({ message: content, projectId, sessionId, skillId, model, mode, resourceRefs })
-            fullContent = resp.content || ''
-            set((state: any) => ({
-              messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, content: fullContent } : m
-              ),
-            }))
-            markSessionStreaming(visibleSessionId, false)
-          } catch (e: any) {
-            markSessionStreaming(visibleSessionId, false)
-            set({ error: e?.message || '发送失败' })
-          }
-        } else {
-          set((state: any) => ({
-            error: error.message,
-            messages: state.messages.map((m: TMessage) =>
-              m.id === aiMsgId ? { ...m, content: (fullContent || m.content || '').trim() || '（生成失败）' } : m
-            ),
-          }))
-          markSessionStreaming(visibleSessionId, false)
-        }
-      } finally {
-        if (externalAbortSignal) {
-          externalAbortSignal.removeEventListener('abort', onExternalAbort)
-        }
-        if (chatStreamAbortBySession.get(streamKey) === streamCtrl) {
-          chatStreamAbortBySession.delete(streamKey)
-        }
-      }
-
-      if (projectId) {
-        await get().fetchResources(projectId)
-      }
+    // 已废弃：使用 sendMessageWS 替代
+    sendMessageStream: async () => {
+      console.warn('sendMessageStream is deprecated, use sendMessageWS instead')
     },
 
-    sendW6PageFromOutlineStream: async (
-      projectId: string,
-      payload: { title: string; outline: string; knowledgePoints?: string },
-      callbacks: { onResult?: (resource: any) => void; onError?: (err: string) => void } = {}
-    ) => {
-      const { onResult, onError } = callbacks
-      const userMsg = {
-        id: 'temp-' + Date.now(),
-        project_id: projectId,
-        role: 'user' as const,
-        content: payload.outline || payload.title,
-        created_at: new Date().toISOString(),
-      }
-      set((state: any) => ({ messages: [...state.messages, userMsg] }))
-      const aiMsgId = 'w6-' + Date.now()
-      const aiMsg = {
-        id: aiMsgId,
-        project_id: projectId,
-        role: 'assistant' as const,
-        content: '',
-        created_at: new Date().toISOString(),
-      }
-      set((state: any) => ({ messages: [...state.messages, aiMsg] }))
-      const steps: string[] = []
-      await projectApi.generatePageFromOutlineStream(
-        projectId,
-        { title: payload.title, outline: payload.outline, knowledgePoints: payload.knowledgePoints },
-        {
-          onProgress: (_step: string, message: string) => {
-            steps.push(message)
-            set((state: any) => ({
-              messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, content: '正在生成动态讲义…\n\n' + steps.join('\n') } : m
-              ),
-            }))
-          },
-          onResult: (resource: any) => {
-            set((state: any) => ({
-              messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, content: '动态讲义已生成，请查看右侧「输出内容」。' } : m
-              ),
-            }))
-            get().fetchResources(projectId)
-            onResult?.(resource)
-          },
-          onError: (detail: string) => {
-            set((state: any) => ({
-              messages: state.messages.map((m: TMessage) =>
-                m.id === aiMsgId ? { ...m, content: '生成失败：' + detail } : m
-              ),
-            }))
-            onError?.(detail)
-          },
-        }
-      )
+    // 已废弃：W6 功能已移除
+    sendW6PageFromOutlineStream: async () => {
+      console.warn('sendW6PageFromOutlineStream is deprecated')
     },
 
     syncSessionState: async (
@@ -484,12 +529,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         },
       }))
       try {
-        await chatApi.syncState({
-          projectId,
-          sessionId,
-          upstreamSessionId: options?.upstreamSessionId,
-          activateUpstream: options?.activateUpstream,
-        })
+        // 新架构下：直接刷新会话列表和资源列表
         await get().fetchSessions(projectId)
         await get().fetchResources(projectId)
         if (options?.refreshMessages) {
@@ -509,10 +549,8 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         }))
       } catch (error: any) {
         console.warn('sync session state failed:', error?.message || error)
-        const msg = String(error?.message || '').toLowerCase()
-        const isTerminal = msg.includes('session upstream id conflict')
         set((state: any) => ({
-          error: isTerminal ? (error?.message || '会话绑定异常，请重新绑定后再试') : state.error,
+          error: state.error,
           sessionSyncMeta: {
             ...state.sessionSyncMeta,
             [syncKey]: {
@@ -521,7 +559,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
               lastFailedAt: Date.now(),
               lastSuccessAt: meta?.lastSuccessAt,
               lastError: error?.message || 'sync failed',
-              isTerminal,
+              isTerminal: false,
             },
           },
         }))

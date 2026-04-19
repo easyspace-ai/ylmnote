@@ -20,9 +20,6 @@ type Config struct {
 	LogFilePath          string
 	LogToStdout          bool
 
-	// W6 is configuration for the IECube W6 AI gateway.
-	// All fields are loaded from environment variables (see .env.example).
-	W6  W6Config
 	SDK AISDKConfig
 
 	// CORSAllowedOrigins 逗号分隔；非 production 且为空时允许任意 Origin（开发便利）。
@@ -33,18 +30,6 @@ type Config struct {
 	RateLimitAuthPerMinute int
 	// ChatCreditCost 每轮成功对话结束后扣减的积分；0 表示关闭扣费。
 	ChatCreditCost int
-}
-
-// W6Config holds settings for the third-party W6 AI service.
-type W6Config struct {
-	BaseURL        string
-	WSSBaseURL     string
-	AuthHeaderKey  string
-	AuthHeaderVal  string
-	ModelProcedure string
-	ModelLLM       string
-	ModelLLMShort  string
-	ModuleName     string
 }
 
 type AISDKConfig struct {
@@ -121,16 +106,6 @@ func Load() *Config {
 		AccessTokenExpireMin: getEnvInt("ACCESS_TOKEN_EXPIRE_MINUTES"),
 		LogFilePath:          strings.TrimSpace(getEnv("LOG_FILE_PATH")),
 		LogToStdout:          getEnvBoolDefault("LOG_TO_STDOUT", true),
-		W6: W6Config{
-			BaseURL:        getEnv("W6_BASE_URL"),
-			WSSBaseURL:     getEnv("W6_WSS_BASE_URL"),
-			AuthHeaderKey:  getEnv("W6_AUTH_HEADER_FIELD"),
-			AuthHeaderVal:  getEnv("W6_AUTH_HEADER_VALUE"),
-			ModelProcedure: getEnv("W6_MODEL_PROCEDURE"),
-			ModelLLM:       getEnv("W6_MODEL_LLM"),
-			ModelLLMShort:  getEnv("W6_MODEL_LLM_SHORT"),
-			ModuleName:     getEnv("W6_MODULE_NAME"),
-		},
 		SDK: AISDKConfig{
 			BaseURL:       getEnv("AI_SDK_BASE_URL"),
 			ServiceAPIKey: firstNonEmpty(getEnv("AI_SDK_SERVICE_API_KEY"), getEnv("AI_SDK_AUTH_HEADER_VAL")),
@@ -169,9 +144,7 @@ func Load() *Config {
 	if cfg.AccessTokenExpireMin == 0 {
 		cfg.AccessTokenExpireMin = 60
 	}
-	if cfg.SDK.BaseURL == "" {
-		cfg.SDK.BaseURL = getEnv("OPENAI_COMPAT_BASE_URL")
-	}
+
 	if cfg.SDK.UploadPath == "" {
 		cfg.SDK.UploadPath = "/api/upload"
 	}
@@ -191,19 +164,6 @@ func Load() *Config {
 		cfg.SDK.RetryMax = 2
 	}
 
-	// W6 configuration is optional at startup; but if BaseURL is set, we require
-	// the essential auth fields to be present to avoid confusing runtime errors.
-	if cfg.W6.BaseURL != "" {
-		if cfg.W6.AuthHeaderKey == "" || cfg.W6.AuthHeaderVal == "" {
-			log.Fatal("W6_BASE_URL is set but W6_AUTH_HEADER_FIELD or W6_AUTH_HEADER_VALUE is missing in .env")
-		}
-		if cfg.W6.WSSBaseURL == "" {
-			log.Fatal("W6_WSS_BASE_URL is required when using W6 AI")
-		}
-		if cfg.W6.ModelProcedure == "" {
-			cfg.W6.ModelProcedure = "raw"
-		}
-	}
 	return cfg
 }
 

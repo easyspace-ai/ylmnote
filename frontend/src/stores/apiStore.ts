@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { projectApi, skillApi, promptTemplateApi } from '@/services/api'
+import type { SessionWebSocket } from '@/services/ws'
 import {
   Project as TProject,
   Message as TMessage,
@@ -12,6 +13,9 @@ import type { SessionSyncMeta } from '@/stores/apiStoreTypes'
 import { createChatConversationSlice } from '@/stores/chatConversationSlice'
 
 export type { SessionSyncMeta } from '@/stores/apiStoreTypes'
+
+/** WebSocket 连接状态 */
+type WSConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
 
 // Store 状态
 interface AppState {
@@ -31,6 +35,11 @@ interface AppState {
   liveTodosBySession: Record<string, Array<{ text: string; done: boolean }>>
   messagePagination: Record<string, { nextSkip: number; hasMore: boolean; loadingOlder: boolean; pageSize: number }>
   sessionSyncMeta: Record<string, SessionSyncMeta>
+  messagesLoadingBySession: Record<string, boolean>
+
+  // WebSocket
+  wsConnections: Record<string, SessionWebSocket>
+  wsStatus: Record<string, WSConnectionStatus>
 
   // 技能
   skills: TSkill[]
@@ -68,9 +77,9 @@ interface AppState {
   loadOlderMessages: (projectId: string, sessionId: string) => Promise<void>
   createSession: (projectId: string, title?: string) => Promise<TSession>
   updateSession: (projectId: string, sessionId: string, title: string) => Promise<void>
-  bindSessionUpstream: (projectId: string, sessionId: string, upstreamSessionId: string) => Promise<void>
   deleteSession: (projectId: string, sessionId: string) => Promise<void>
   sendMessage: (projectId: string, content: string, skillId?: string) => Promise<void>
+  /** @deprecated 使用 sendMessageWS 替代 */
   sendMessageStream: (
     projectId: string,
     sessionId: string | undefined,
@@ -83,8 +92,15 @@ interface AppState {
     /** 可选：与内部 controller 并行中止（例如父组件卸载） */
     externalAbortSignal?: AbortSignal
   ) => Promise<void>
+  /** 通过 WebSocket 发送消息 */
+  sendMessageWS: (sessionId: string, content: string, attachments?: string[]) => void
+  /** 建立 WebSocket 连接 */
+  connectWebSocket: (sessionId: string, projectId?: string) => void
+  /** 断开 WebSocket 连接 */
+  disconnectWebSocket: (sessionId: string) => void
   /** 中止流式读取：不传则中止全部；传 sessionId 则仅中止该会话 */
   abortActiveMessageStream: (sessionId?: string) => void
+  /** @deprecated W6 功能已移除 */
   sendW6PageFromOutlineStream: (projectId: string, payload: { title: string; outline: string; knowledgePoints?: string }, callbacks?: { onResult?: (resource: any) => void; onError?: (err: string) => void }) => Promise<void>
   syncSessionState: (projectId: string, sessionId: string, options?: { refreshMessages?: boolean; upstreamSessionId?: string; activateUpstream?: boolean; force?: boolean }) => Promise<void>
   getSessionSyncMeta: (projectId: string, sessionId: string) => SessionSyncMeta | undefined
@@ -125,7 +141,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   recommendedSkills: [],
   promptTemplates: [],
   sessionSyncMeta: {},
-  
+
   // 项目操作
   fetchProjects: async (status?: string) => {
     try {
@@ -305,13 +321,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     await projectApi.updateSession(projectId, sessionId, { title })
     set(state => ({
       sessions: state.sessions.map(s => s.id === sessionId ? { ...s, title } : s)
-    }))
-  },
-
-  bindSessionUpstream: async (projectId: string, sessionId: string, upstreamSessionId: string) => {
-    const updated = await projectApi.bindSessionUpstream(projectId, sessionId, upstreamSessionId)
-    set(state => ({
-      sessions: state.sessions.map(s => s.id === sessionId ? updated : s)
     }))
   },
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -141,6 +142,128 @@ func (c *Client) AgentMessages(ctx context.Context, sessionID string, limit, off
 		c.baseHTTP, url.PathEscape(strings.TrimSpace(sessionID)), limit, offset)
 	err := c.doJSON(ctx, http.MethodGet, u, nil, &out)
 	return out, err
+}
+
+// SourceResponse represents the response from /api/source/{id} endpoint.
+type SourceResponse struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	URL         string `json:"url"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// GetSource fetches source metadata from upstream.
+func (c *Client) GetSource(ctx context.Context, sourceID string) (*SourceResponse, error) {
+	u := fmt.Sprintf("%s/api/source/%s", c.baseHTTP, url.PathEscape(strings.TrimSpace(sourceID)))
+	var out SourceResponse
+	if err := c.doJSON(ctx, http.MethodGet, u, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DownloadSource downloads source content from upstream via /api/source/{id} endpoint.
+// The upstream returns content as a byte array in JSON format.
+// It returns the raw bytes and inferred content type.
+func (c *Client) DownloadSource(ctx context.Context, sourceID string) ([]byte, string, error) {
+	u := fmt.Sprintf("%s/api/source/%s", c.baseHTTP, url.PathEscape(strings.TrimSpace(sourceID)))
+
+	raw, err := c.doRaw(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("get source: %w", err)
+	}
+
+	// 上游响应可能是单个对象或数组，统一处理
+	var items []map[string]interface{}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		// 尝试作为单个对象解析
+		var single map[string]interface{}
+		if err2 := json.Unmarshal(raw, &single); err2 != nil {
+			return nil, "", fmt.Errorf("decode response: %w", err)
+		}
+		items = []map[string]interface{}{single}
+	}
+
+	if len(items) == 0 {
+		return nil, "", fmt.Errorf("empty source response")
+	}
+
+	item := items[0]
+
+	// 提取 content 字段 - 字节码数组格式 [60, 33, 68, ...]
+	contentRaw, ok := item["content"]
+	if !ok || contentRaw == nil {
+		return nil, "", fmt.Errorf("no content field in source response")
+	}
+
+	var result []byte
+
+	switch v := contentRaw.(type) {
+	case []interface{}:
+		result = make([]byte, 0, len(v))
+		for _, b := range v {
+			if num, ok := b.(float64); ok {
+				result = append(result, byte(int(num)))
+			}
+		}
+	case string:
+		result = []byte(v)
+	default:
+		return nil, "", fmt.Errorf("unexpected content type: %T", contentRaw)
+	}
+
+	if len(result) == 0 {
+		return nil, "", fmt.Errorf("empty content")
+	}
+
+	// 推断 content type
+	contentType := "application/octet-stream"
+	if data, ok := item["data"].(map[string]interface{}); ok {
+		if filename, ok := data["filename"].(string); ok && filename != "" {
+			contentType = inferContentTypeFromFilename(filename)
+		}
+	}
+
+	return result, contentType, nil
+}
+
+// inferContentTypeFromFilename 根据文件名推断 Content-Type
+func inferContentTypeFromFilename(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".md":
+		return "text/markdown; charset=utf-8"
+	case ".txt":
+		return "text/plain; charset=utf-8"
+	case ".json":
+		return "application/json"
+	case ".css":
+		return "text/css"
+	case ".js":
+		return "application/javascript"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".mp4":
+		return "video/mp4"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // DialSession opens upstream websocket and sends initial {"id": "<sessionID>"} frame.

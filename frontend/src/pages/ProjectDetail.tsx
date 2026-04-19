@@ -1,10 +1,11 @@
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { 
   FileText, Link as LinkIcon, StickyNote,
   Upload, Plus, MoreVertical, FolderOpen, MessageCircle, Pencil, Trash2, 
-  FileOutput, ArrowLeft, Clock, ChevronRight, ChevronLeft, X, Archive, Maximize2, Minimize2
+  FileOutput, ArrowLeft, Clock, ChevronRight, ChevronLeft, X, Archive, Maximize2, Minimize2, Download,
+  FileX
 } from 'lucide-react'
 import { cn } from '@/utils'
 import { useToast } from '@/components/ui/Feedback'
@@ -18,7 +19,386 @@ import { useAppStore } from '@/stores/apiStore'
 import { queryClient } from '@/lib/queryClient'
 import { useSidebarStore } from '@/components/layout/Sidebar'
 import { chatApi, projectApi } from '@/services/api'
+import { API_ENDPOINTS, API_CONFIG } from '@/config/api'
 import { useQueryClient } from '@tanstack/react-query'
+
+// ===== 文件类型检测与预览工具函数 =====
+
+type PreviewType = 'html' | 'markdown' | 'image' | 'audio' | 'video' | 'ppt' | 'unsupported'
+
+interface FileTypeInfo {
+  type: PreviewType
+  ext: string
+  mimeType?: string
+}
+
+/** 根据文件名获取文件扩展名 */
+const getFileExtension = (filename?: string): string => {
+  if (!filename) return ''
+  const match = filename.match(/\.([a-zA-Z0-9]+)$/)
+  return match ? match[1].toLowerCase() : ''
+}
+
+/** 检测文件预览类型 */
+const detectPreviewType = (filename?: string): FileTypeInfo => {
+  const ext = getFileExtension(filename)
+  
+  // HTML 文件
+  if (['html', 'htm'].includes(ext)) {
+    return { type: 'html', ext, mimeType: 'text/html' }
+  }
+  
+  // Markdown 文件
+  if (ext === 'md') {
+    return { type: 'markdown', ext, mimeType: 'text/markdown' }
+  }
+  
+  // 图片文件
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)) {
+    const mimeMap: Record<string, string> = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
+      bmp: 'image/bmp', ico: 'image/x-icon'
+    }
+    return { type: 'image', ext, mimeType: mimeMap[ext] || 'image/*' }
+  }
+  
+  // 音频文件
+  if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) {
+    const mimeMap: Record<string, string> = {
+      mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+      m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac'
+    }
+    return { type: 'audio', ext, mimeType: mimeMap[ext] || 'audio/*' }
+  }
+  
+  // 视频文件
+  if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) {
+    const mimeMap: Record<string, string> = {
+      mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
+      avi: 'video/x-msvideo', mkv: 'video/x-matroska'
+    }
+    return { type: 'video', ext, mimeType: mimeMap[ext] || 'video/*' }
+  }
+  
+  // PPT 文件（不提供预览）
+  if (['ppt', 'pptx'].includes(ext)) {
+    return { type: 'ppt', ext, mimeType: ext === 'ppt' ? 'application/vnd.ms-powerpoint' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }
+  }
+  
+  // 其他类型
+  return { type: 'unsupported', ext }
+}
+
+/** 构建预览/下载 URL */
+const buildArtifactUrl = (projectId: string, resourceId: string, type: 'preview' | 'download'): string => {
+  const baseUrl = API_CONFIG.baseUrl || ''
+  const endpoint = type === 'preview' 
+    ? API_ENDPOINTS.projectArtifactPreview(projectId, resourceId)
+    : API_ENDPOINTS.projectArtifactDownload(projectId, resourceId)
+  return `${baseUrl}${endpoint}`
+}
+
+/** 获取认证 token - 优先从 authStore (zustand persist) 获取 */
+const getAuthToken = (): string | null => {
+  // 从 zustand persist 存储中读取
+  try {
+    const authStorage = localStorage.getItem('youmind-auth')
+    if (authStorage) {
+      const authData = JSON.parse(authStorage)
+      if (authData?.state?.token) {
+        return authData.state.token
+      }
+    }
+  } catch {
+    // ignore parse error
+  }
+  // fallback: 尝试直接读取 legacy token
+  return localStorage.getItem('token') || sessionStorage.getItem('token') || null
+}
+
+// ===== Artifact 预览面板组件 =====
+
+interface ViewingResource {
+  id: string
+  name: string
+  type?: string
+  content?: string
+  url?: string | null
+}
+
+interface ArtifactPreviewPanelProps {
+  viewingResource: ViewingResource
+  projectId: string
+  isPreviewExpanded: boolean
+  onClose: () => void
+  onToggleExpand: () => void
+}
+
+/** Artifact 预览面板 - 支持多种文件类型的预览 */
+function ArtifactPreviewPanel({
+  viewingResource,
+  projectId,
+  isPreviewExpanded,
+  onClose,
+  onToggleExpand,
+}: ArtifactPreviewPanelProps) {
+  const { addToast } = useToast()
+  const fileType = useMemo(() => detectPreviewType(viewingResource.name), [viewingResource.name])
+  
+  // Markdown 内容状态
+  const [markdownContent, setMarkdownContent] = useState<string>('')
+  const [markdownLoading, setMarkdownLoading] = useState(false)
+  const [markdownError, setMarkdownError] = useState<string | null>(null)
+  
+  // 构建预览和下载 URL
+  const previewUrl = useMemo(() => {
+    const token = getAuthToken()
+    const baseUrl = buildArtifactUrl(projectId, viewingResource.id, 'preview')
+    return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl
+  }, [projectId, viewingResource.id])
+  
+  const downloadUrl = useMemo(() => {
+    const token = getAuthToken()
+    const baseUrl = buildArtifactUrl(projectId, viewingResource.id, 'download')
+    return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl
+  }, [projectId, viewingResource.id])
+  
+  // 处理下载
+  const handleDownload = useCallback(() => {
+    window.open(downloadUrl, '_blank')
+    addToast('success', '下载已开始')
+  }, [downloadUrl, addToast])
+  
+  // 获取 Markdown 内容
+  useEffect(() => {
+    if (fileType.type !== 'markdown') {
+      setMarkdownContent('')
+      setMarkdownError(null)
+      return
+    }
+    
+    // 如果有内联内容，直接使用
+    if (viewingResource.content?.trim()) {
+      setMarkdownContent(viewingResource.content)
+      return
+    }
+    
+    // 否则从 preview API 获取
+    let cancelled = false
+    setMarkdownLoading(true)
+    setMarkdownError(null)
+    
+    fetch(previewUrl, { headers: { 'Accept': 'text/markdown,text/plain,*/*' } })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const text = await res.text()
+        if (!cancelled) setMarkdownContent(text)
+      })
+      .catch((err) => {
+        if (!cancelled) setMarkdownError(err?.message || '加载失败')
+      })
+      .finally(() => {
+        if (!cancelled) setMarkdownLoading(false)
+      })
+    
+    return () => { cancelled = true }
+  }, [fileType.type, viewingResource.content, previewUrl])
+  
+  // 渲染预览内容
+  const renderPreview = () => {
+    switch (fileType.type) {
+      case 'html':
+        return (
+          <iframe
+            title={viewingResource.name}
+            className="w-full h-full border-0 bg-white"
+            src={previewUrl}
+            sandbox="allow-scripts allow-same-origin allow-popups"
+          />
+        )
+        
+      case 'markdown':
+        if (markdownLoading) {
+          return (
+            <div className="h-full flex items-center justify-center bg-white">
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <span className="w-4 h-4 rounded-full border-2 border-gray-300 border-t-gray-600 animate-spin" />
+                <span>正在加载 Markdown...</span>
+              </div>
+            </div>
+          )
+        }
+        if (markdownError) {
+          return (
+            <div className="h-full flex flex-col items-center justify-center gap-3 bg-white p-4">
+              <p className="text-sm text-gray-500">加载失败: {markdownError}</p>
+              <button
+                onClick={handleDownload}
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-200 text-gray-700 hover:text-gray-900 hover:border-gray-300"
+              >
+                下载文件
+              </button>
+            </div>
+          )
+        }
+        return (
+          <div className="h-full overflow-y-auto p-4 bg-white">
+            <MarkdownRenderer content={markdownContent || '无内容'} />
+          </div>
+        )
+        
+      case 'image':
+        return (
+          <div className="h-full flex items-center justify-center bg-gray-50 p-4 overflow-auto">
+            <img
+              src={previewUrl}
+              alt={viewingResource.name}
+              className="max-w-full max-h-full object-contain shadow-lg rounded-lg"
+            />
+          </div>
+        )
+        
+      case 'audio':
+        return (
+          <div className="h-full flex flex-col items-center justify-center gap-4 bg-white p-4">
+            <div className="p-4 bg-indigo-50 rounded-full">
+              <svg className="w-12 h-12 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+            </div>
+            <audio
+              controls
+              src={previewUrl}
+              className="w-full max-w-md"
+            />
+            <p className="text-xs text-gray-400">{viewingResource.name}</p>
+          </div>
+        )
+        
+      case 'video':
+        return (
+          <div className="h-full flex items-center justify-center bg-black p-4">
+            <video
+              controls
+              src={previewUrl}
+              className="max-w-full max-h-full rounded-lg"
+            />
+          </div>
+        )
+        
+      case 'ppt':
+        return (
+          <div className="h-full flex flex-col items-center justify-center gap-4 bg-white p-4">
+            <div className="p-6 bg-amber-50 rounded-2xl">
+              <svg className="w-16 h-16 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+              </svg>
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-medium text-gray-700">{viewingResource.name}</p>
+              <p className="text-sm text-gray-500 mt-2">该文件类型不支持预览，请下载后查看</p>
+            </div>
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+            >
+              <Download size={16} />
+              下载文件
+            </button>
+          </div>
+        )
+        
+      case 'unsupported':
+      default:
+        return (
+          <div className="h-full flex flex-col items-center justify-center gap-4 bg-white p-4">
+            <div className="p-6 bg-gray-50 rounded-2xl">
+              <FileX className="w-16 h-16 text-gray-400" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-medium text-gray-700">{viewingResource.name}</p>
+              <p className="text-sm text-gray-500 mt-2">该文件类型暂不支持预览</p>
+              {fileType.ext && (
+                <p className="text-xs text-gray-400 mt-1">扩展名: .{fileType.ext}</p>
+              )}
+            </div>
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-colors"
+            >
+              <Download size={16} />
+              下载文件
+            </button>
+          </div>
+        )
+    }
+  }
+  
+  // 是否显示新标签页打开按钮（仅 HTML）
+  const showNewTabButton = fileType.type === 'html'
+  
+  return (
+    <>
+      {isPreviewExpanded && (
+        <div
+          className="fixed inset-0 bg-black/30 z-[80]"
+          onClick={onClose}
+        />
+      )}
+      <div
+        className={cn(
+          'overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl',
+          isPreviewExpanded
+            ? 'fixed inset-4 z-[90]'
+            : 'absolute inset-0 z-30'
+        )}
+      >
+        {/* 标题栏 */}
+        <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
+          <span className="text-sm font-semibold text-gray-800 truncate">{viewingResource.name}</span>
+          <div className="flex items-center gap-1.5">
+            {showNewTabButton && (
+              <button
+                onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}
+                className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
+                title="在新标签页预览"
+              >
+                新标签预览
+              </button>
+            )}
+            <button
+              onClick={handleDownload}
+              className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
+              title="下载文件"
+            >
+              下载
+            </button>
+            <button
+              onClick={onToggleExpand}
+              className="text-xs p-1.5 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
+              title={isPreviewExpanded ? '缩回右栏' : '放大预览'}
+            >
+              {isPreviewExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
+            <button
+              onClick={onClose}
+              className="text-xs p-1.5 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
+              title="关闭预览"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+        
+        {/* 预览内容区 */}
+        <div className="h-[calc(100%-44px)] min-h-0 overflow-hidden">
+          {renderPreview()}
+        </div>
+      </div>
+    </>
+  )
+}
 
 type ResourceType = 'documents' | 'links' | 'notes'
 type MainTabType = 'resources' | 'chat'
@@ -115,9 +495,10 @@ export default function ProjectDetail() {
     fetchProject,
     fetchMessages,
     fetchInstalledSkills,
-    sendMessageStream,
+    sendMessageWS,
+    connectWebSocket,
+    disconnectWebSocket,
     abortActiveMessageStream,
-    sendW6PageFromOutlineStream,
     resources,
     fetchResources,
     createResource,
@@ -133,6 +514,9 @@ export default function ProjectDetail() {
   const fetchPromptTemplates = useAppStore((state) => state.fetchPromptTemplates)
   const isStreaming = useAppStore((state) =>
     Boolean(urlSessionId && state.streamingBySession?.[urlSessionId])
+  )
+  const isLoadingMessages = useAppStore((state) =>
+    Boolean(urlSessionId && state.messagesLoadingBySession?.[urlSessionId])
   )
   
   const [activeMainTab, setActiveMainTab] = useState<MainTabType>('chat')
@@ -151,6 +535,7 @@ export default function ProjectDetail() {
   const [isRightCollapsed, setIsRightCollapsed] = useState(false)
   const [rightWidth, setRightWidth] = useState(280)
   const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
+  const [uploading, setUploading] = useState(false)
 
   // 拖拽相关状态
   const startDragLeft = (e: React.MouseEvent) => {
@@ -219,31 +604,19 @@ export default function ProjectDetail() {
   useEffect(() => {
     if (!id || urlSessionId) return
     let cancelled = false
-    const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
     const run = async () => {
       await fetchProject(id)
       await fetchSessions(id)
       if (cancelled) return
-      let sessList = useAppStore.getState().sessions
-      // 后端会异步创建默认会话；给一点时间避免前端兜底创建导致“双会话”。
-      if (sessList.length === 0) {
-        for (let i = 0; i < 3 && !cancelled; i++) {
-          await sleep(250)
-          await fetchSessions(id)
-          sessList = useAppStore.getState().sessions
-          if (sessList.length > 0) break
-        }
-      }
-      const lastSessionId = localStorage.getItem(getLastSessionStorageKey(id))
-      const preferredSession =
-        (lastSessionId && sessList.find(s => s.id === lastSessionId)) || sessList[0]
-      if (preferredSession && !hasRedirected.current) {
+      const sessList = useAppStore.getState().sessions
+      if (sessList.length > 0 && !hasRedirected.current) {
         hasRedirected.current = true
-        navigate(`/boards/${id}/sessions/${preferredSession.id}`, { replace: true })
-      } else {
+        navigate(`/boards/${id}/sessions/${sessList[0].id}`, { replace: true })
+      } else if (!hasRedirected.current) {
+        // 极端情况：后端同步创建失败，前端兜底
         try {
           const newSess = await createSession(id, '新对话')
-          if (!cancelled && !hasRedirected.current) {
+          if (!cancelled) {
             hasRedirected.current = true
             navigate(`/boards/${id}/sessions/${newSess.id}`, { replace: true })
           }
@@ -252,15 +625,17 @@ export default function ProjectDetail() {
     }
     run()
     return () => { cancelled = true }
-  }, [id, urlSessionId, fetchProject, fetchSessions, createSession, navigate])
+  }, [id, urlSessionId])
 
-  // 会话路由切换：切激活会话；先拉会话列表（含 upstream_session_id）再拉消息，保证 localStorage 缓存与当前上游 id 对齐后再读缓存。
+  // 会话路由切换：切激活会话；先拉会话列表再拉消息。
   useEffect(() => {
     setActiveMessageSession(urlSessionId)
     if (id && urlSessionId) {
       void (async () => {
         await fetchSessions(id)
         await fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
+        // 建立 WebSocket 连接
+        connectWebSocket(urlSessionId, id)
         // 后端会在对话完成后异步回填 timeline；延迟再拉一次确保切回会话时拿到完整历史。
         window.setTimeout(() => {
           if (useAppStore.getState().activeMessageSessionId !== urlSessionId) return
@@ -272,7 +647,14 @@ export default function ProjectDetail() {
     } else {
       clearSessionMessages()
     }
-  }, [id, urlSessionId, setActiveMessageSession, fetchSessions, fetchMessagesBySession, clearSessionMessages])
+    
+    // 清理函数：切换会话时断开旧连接
+    return () => {
+      if (urlSessionId) {
+        disconnectWebSocket(urlSessionId)
+      }
+    }
+  }, [id, urlSessionId, setActiveMessageSession, fetchSessions, fetchMessagesBySession, clearSessionMessages, connectWebSocket, disconnectWebSocket])
 
   useEffect(() => {
     return () => {
@@ -325,7 +707,6 @@ export default function ProjectDetail() {
     setStoppingUpstream(true)
     try {
       useAppStore.getState().abortActiveMessageStream(urlSessionId)
-      await chatApi.stopUpstream({ projectId: id, sessionId: urlSessionId })
       addToast('success', '已发送停止指令')
     } catch (e: any) {
       addToast('error', e?.message || '停止失败')
@@ -356,92 +737,58 @@ export default function ProjectDetail() {
 
   // 发送消息
   const handleSendMessage = async (message: string, mode: string, skillId: string | null, attachments: Attachment[], model?: string) => {
-    if (!id) return
-    const sendingMessage = message
-    const resourceRefs: Array<{ id: string; name?: string; type?: string }> = []
-    
+    if (!id || !urlSessionId) return
+    let sendingMessage = message
+    const resourceRefs: string[] = []
+      
     // 1. 真上传本地文件附件
     const localAttachments = attachments.filter(a => a.type === 'local' && a.file)
     if (localAttachments.length > 0) {
-      addToast('info', '正在上传附件...')
+      setUploading(true)
+      addToast('info', `正在上传 ${localAttachments.length} 个附件...`)
       try {
+        const localFileNames: string[] = []
         for (const att of localAttachments) {
           const res = await uploadResource(id, att.file!)
           if (res?.id) {
-            resourceRefs.push({
-              id: res.id,
-              name: res.name || att.name,
-              type: res.type || 'document',
-            })
+            resourceRefs.push(res.id)
+            localFileNames.push(res.name || att.file!.name)
           }
         }
         fetchResources(id)
         addToast('success', '附件上传成功')
+        // 将本地文件名注入消息文本，与资料库的 [引用资料: xxx] 格式保持一致
+        if (localFileNames.length > 0) {
+          const localRefTexts = localFileNames.map(name => `[上传文件: ${name}]`)
+          sendingMessage = localRefTexts.join('\n') + '\n\n' + sendingMessage
+        }
       } catch (err) {
         console.error('上传附件失败:', err)
         addToast('error', '附件上传失败')
+      } finally {
+        setUploading(false)
       }
     }
-    
-    // 2. 引用的资料库文件
+      
+    // 2. 引用的资料库文件 - 将资源信息注入消息内容，让上游 AI 能识别
     const libraryAttachments = attachments.filter(a => a.type === 'library')
     if (libraryAttachments.length > 0) {
+      const storeResources = useAppStore.getState().resources
+      const refTexts: string[] = []
       for (const ref of libraryAttachments) {
-        resourceRefs.push({
-          id: ref.id,
-          name: ref.name,
-          type: 'library',
-        })
-      }
-    }
-
-    // 3. 如果当前技能是“动态讲义”，走 W6 流式生成：聊天框实时显示进度，完成后在右侧输出栏展示
-    if (skillId && id) {
-      const selectedSkill = installedSkills.find(s => s.id === skillId)
-      if (selectedSkill && selectedSkill.name.includes('动态讲义')) {
-        try {
-          setIsRightCollapsed(false)
-          await sendW6PageFromOutlineStream(
-            id,
-            {
-              title: sendingMessage.split('\n')[0] || selectedSkill.name || '动态讲义网页',
-              outline: sendingMessage,
-            },
-            {
-              onResult: (resource) => {
-                addToast('success', '网页已生成，请查看右侧输出内容')
-                if (resource?.id) {
-                  setViewingResource({
-                    id: resource.id,
-                    name: resource.name || '动态讲义',
-                    type: resource.type || 'html_page',
-                    content: resource.content,
-                    url: resource.url,
-                  })
-                  setIsPreviewExpanded(false)
-                }
-              },
-              onError: (msg) => addToast('error', msg || '生成网页失败'),
-            }
-          )
-        } catch (err) {
-          console.error(err)
-          addToast('error', (err as any)?.message || '生成网页失败')
+        resourceRefs.push(ref.id)
+        const resource = storeResources.find(r => r.id === ref.id)
+        if (resource) {
+          refTexts.push(`[引用资料: ${resource.name}]`)
         }
-        return
+      }
+      if (refTexts.length > 0) {
+        sendingMessage = refTexts.join('\n') + '\n\n' + sendingMessage
       }
     }
-
-    await sendMessageStream(
-      id,
-      urlSessionId ?? undefined,
-      sendingMessage,
-      skillId || undefined,
-      undefined,
-      model,
-      mode,
-      resourceRefs
-    )
+  
+    // 3. 通过 WebSocket 发送消息
+    sendMessageWS(urlSessionId, sendingMessage, resourceRefs)
   }
   
   const mapStreamStatus = (s?: string): MessageStatus | undefined => {
@@ -537,115 +884,6 @@ export default function ProjectDetail() {
     done: item.done,
   }))
   const activeDocument = activeDocumentId ? docResources.find(d => d.id === activeDocumentId) : null
-  const viewingSourceID = viewingResource?.url?.startsWith('source:') ? viewingResource.url.replace('source:', '') : null
-  const getResourceExt = (name?: string, url?: string | null) => {
-    const fromName = (name || '').split('.').pop()?.toLowerCase() || ''
-    if (fromName) return fromName
-    const fromURL = (url || '').split('?')[0].split('#')[0]
-    const ext = fromURL.split('.').pop()?.toLowerCase() || ''
-    return ext
-  }
-  const viewingExt = getResourceExt(viewingResource?.name, viewingResource?.url)
-  const isHTMLPreview = Boolean(viewingResource && (viewingResource.type === 'html_page' || viewingExt === 'html' || viewingExt === 'htm'))
-  const [htmlPreviewUrl, setHtmlPreviewUrl] = useState<string | null>(null)
-  const [htmlPreviewLoading, setHtmlPreviewLoading] = useState(false)
-  const [htmlPreviewError, setHtmlPreviewError] = useState<string | null>(null)
-  useEffect(() => {
-    if (!isHTMLPreview) {
-      setHtmlPreviewUrl(null)
-      setHtmlPreviewLoading(false)
-      setHtmlPreviewError(null)
-      return
-    }
-    let cancelled = false
-    let objectURL: string | null = null
-
-    const run = async () => {
-      try {
-        setHtmlPreviewLoading(true)
-        setHtmlPreviewError(null)
-
-        const inlineContent = (viewingResource?.content || '').trim()
-        if (inlineContent) {
-          const blob = new Blob([inlineContent], { type: 'text/html;charset=utf-8' })
-          objectURL = URL.createObjectURL(blob)
-          if (!cancelled) setHtmlPreviewUrl(objectURL)
-          return
-        }
-
-        if (viewingSourceID) {
-          const source = await chatApi.fetchSourceFile(viewingSourceID)
-          objectURL = URL.createObjectURL(source.blob)
-          if (!cancelled) setHtmlPreviewUrl(objectURL)
-          return
-        }
-
-        if (!cancelled) {
-          setHtmlPreviewUrl(null)
-          setHtmlPreviewError('当前网页产物缺少可预览内容')
-        }
-      } catch (error: any) {
-        if (!cancelled) {
-          setHtmlPreviewUrl(null)
-          setHtmlPreviewError(error?.message || '网页预览加载失败')
-        }
-      } finally {
-        if (!cancelled) setHtmlPreviewLoading(false)
-      }
-    }
-    run()
-
-    return () => {
-      cancelled = true
-      if (objectURL) URL.revokeObjectURL(objectURL)
-    }
-  }, [isHTMLPreview, viewingResource?.content, viewingSourceID, viewingResource?.id])
-  const downloadOnlyExts = new Set([
-    'ppt', 'pptx', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar', '7z', 'mp3', 'mp4', 'mov', 'avi'
-  ])
-  const isDownloadOnlyPreview = Boolean(viewingResource && !isHTMLPreview && downloadOnlyExts.has(viewingExt))
-  const canDownloadViewingResource = Boolean(
-    viewingResource && (
-      (isHTMLPreview && (viewingResource.content || '').trim()) ||
-      viewingSourceID
-    )
-  )
-
-  const handleDownloadViewingResource = async () => {
-    if (!viewingResource) return
-    if (isHTMLPreview && (viewingResource.content || '').trim()) {
-      try {
-        const html = viewingResource.content || ''
-        const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-        const objectURL = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        const fallback = 'preview.html'
-        const hasExt = /\.[a-z0-9]+$/i.test(viewingResource.name || '')
-        a.href = objectURL
-        a.download = hasExt ? (viewingResource.name || fallback) : `${viewingResource.name || 'preview'}.html`
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(objectURL)
-        addToast('success', '下载已开始')
-      } catch (error) {
-        console.error(error)
-        addToast('error', '下载失败')
-      }
-      return
-    }
-    if (!viewingSourceID) {
-      addToast('error', '当前产物暂不支持下载')
-      return
-    }
-    try {
-      await chatApi.downloadSource(viewingSourceID)
-      addToast('success', '下载已开始')
-    } catch (error) {
-      console.error(error)
-      addToast('error', '下载失败')
-    }
-  }
 
   const studioTools = promptTemplates.map((template) => {
     const styleMap: Record<string, { color: string; textColor: string }> = {
@@ -680,6 +918,45 @@ export default function ProjectDetail() {
       return
     }
     setStudioInputPrefill({ text: tool.prompt.trim(), seq: Date.now() })
+  }
+
+  /** Studio 产物列表项下载：优先走 source: 下载，否则预留 artifact download API */
+  const handleDownloadResource = async (resource: typeof outputResources[number]) => {
+    const sourceId = resource.url?.startsWith('source:') ? resource.url.replace('source:', '') : null
+    if (sourceId) {
+      try {
+        await chatApi.downloadSource(sourceId)
+        addToast('success', '下载已开始')
+      } catch (error) {
+        console.error(error)
+        addToast('error', '下载失败')
+      }
+      return
+    }
+    if (resource.content?.trim()) {
+      try {
+        const blob = new Blob([resource.content], { type: 'text/html;charset=utf-8' })
+        const objectURL = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        const hasExt = /\.[a-z0-9]+$/i.test(resource.name || '')
+        a.href = objectURL
+        a.download = hasExt ? resource.name : `${resource.name}.html`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(objectURL)
+        addToast('success', '下载已开始')
+      } catch (error) {
+        console.error(error)
+        addToast('error', '下载失败')
+      }
+      return
+    }
+    // 预留后端 artifact download API（Task #18 将实现）
+    if (id) {
+      const downloadUrl = `${API_ENDPOINTS.projectArtifactDownload(id, resource.id)}`
+      window.open(downloadUrl, '_blank')
+    }
   }
 
   const resourceTabs = [
@@ -1046,17 +1323,17 @@ export default function ProjectDetail() {
                   <div className="p-3">
                     <div className="flex items-center justify-between mb-3">
                       <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">对话管理</p>
-                      <button 
-                        onClick={async () => {
-                          if (!id) return
-                          const sess = await createSession(id, '新对话')
-                          if (sess?.id) navigate(`/boards/${id}/sessions/${sess.id}`)
-                        }}
-                        className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
-                        title="新建对话"
-                      >
-                        <Plus size={14} />
-                      </button>
+                      {/*<button */}
+                      {/*  onClick={async () => {*/}
+                      {/*    if (!id) return*/}
+                      {/*    const sess = await createSession(id, '新对话')*/}
+                      {/*    if (sess?.id) navigate(`/boards/${id}/sessions/${sess.id}`)*/}
+                      {/*  }}*/}
+                      {/*  className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"*/}
+                      {/*  title="新建对话"*/}
+                      {/*>*/}
+                      {/*  <Plus size={14} />*/}
+                      {/*</button>*/}
                     </div>
                     <div className="space-y-1">
                       {sessions.filter(s => s.project_id === id).map(s => {
@@ -1141,9 +1418,9 @@ export default function ProjectDetail() {
               studioActions={studioTools}
               onRunStudioTool={(tool) => applyStudioToolPrompt(tool)}
               libraryFiles={libraryFiles}
-              upstreamInputLocked={false}
+              upstreamInputLocked={uploading}
               upstreamCanStop={Boolean(urlSessionId && isStreaming)}
-              upstreamBanner={null}
+              upstreamBanner={uploading ? '正在上传附件，请稍候…' : null}
               stoppingUpstream={stoppingUpstream}
               onUpstreamStop={handleUpstreamStop}
               onSendMessage={handleSendMessage}
@@ -1163,6 +1440,7 @@ export default function ProjectDetail() {
               }}
               autoFocus={true}
               isStreaming={isStreaming}
+              isLoadingMessages={isLoadingMessages}
               hasMoreOlder={Boolean(currentSessionPagination?.hasMore)}
               loadingOlder={Boolean(currentSessionPagination?.loadingOlder)}
               onLoadOlder={async () => {
@@ -1259,7 +1537,9 @@ export default function ProjectDetail() {
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium text-gray-700 truncate">{output.name}</p>
                           <p className="text-xs text-gray-400 flex items-center gap-1.5">
-                            <span>{output.type === 'html_page' ? '网页' : '输出文档'}</span>
+                            <span>
+                              {output.type === 'html_page' ? '网页' : output.type === 'artifact' ? 'Artifact' : '输出文档'}
+                            </span>
                             <span
                               className={cn(
                                 'rounded px-1.5 py-0.5 text-[10px] font-medium',
@@ -1272,132 +1552,35 @@ export default function ProjectDetail() {
                             </span>
                           </p>
                         </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDownloadResource(output)
+                          }}
+                          className="p-1.5 text-gray-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                          title="下载"
+                        >
+                          <Download size={13} />
+                        </button>
                         <MoreMenu onRename={() => handleRename('output', output.id)} onDelete={() => handleDelete('output', output.id)} />
                       </div>
                     ))}
-                    
                   </div>
-
-                   
                 </div>
-
-                
               </div>
-              {viewingResource && (
-                <>
-                  {isPreviewExpanded && (
-                    <div
-                      className="fixed inset-0 bg-black/30 z-[80]"
-                      onClick={() => {
-                        setViewingResource(null)
-                        setIsPreviewExpanded(false)
-                      }}
-                    />
-                  )}
-                  <div
-                    className={cn(
-                      'overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl',
-                      isPreviewExpanded
-                        ? 'fixed inset-4 z-[90]'
-                        : 'absolute inset-0 z-30'
-                    )}
-                  >
-                    <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
-                      <span className="text-sm font-semibold text-gray-800 truncate">{viewingResource.name}</span>
-                      <div className="flex items-center gap-1.5">
-                        {isHTMLPreview && viewingResource.content && (
-                          <button
-                            onClick={() => {
-                              if (htmlPreviewUrl) {
-                                window.open(htmlPreviewUrl, '_blank', 'noopener,noreferrer')
-                                return
-                              }
-                              const win = window.open('', '_blank')
-                              if (!win) return
-                              win.document.open()
-                              win.document.write(viewingResource.content || '')
-                              win.document.close()
-                            }}
-                            className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-                            title="在新标签页预览网页"
-                          >
-                            新标签预览
-                          </button>
-                        )}
-                        {canDownloadViewingResource && (
-                          <button
-                            onClick={handleDownloadViewingResource}
-                            className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-                            title="下载文件"
-                          >
-                            下载
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setIsPreviewExpanded(v => !v)}
-                          className="text-xs p-1.5 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-                          title={isPreviewExpanded ? '缩回右栏' : '放大预览'}
-                        >
-                          {isPreviewExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                        </button>
-                        <button
-                          onClick={() => {
-                            setViewingResource(null)
-                            setIsPreviewExpanded(false)
-                          }}
-                          className="text-xs p-1.5 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-                          title="关闭预览"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="h-[calc(100%-44px)] min-h-0 overflow-hidden">
-                      {isHTMLPreview ? (
-                        htmlPreviewLoading ? (
-                          <div className="h-full flex items-center justify-center bg-white">
-                            <div className="flex items-center gap-2 text-sm text-gray-500">
-                              <span className="w-4 h-4 rounded-full border-2 border-gray-300 border-t-gray-600 animate-spin" />
-                              <span>正在加载网页预览...</span>
-                            </div>
-                          </div>
-                        ) : htmlPreviewUrl ? (
-                          <iframe
-                            title={viewingResource.name}
-                            className="w-full h-full border-0 bg-white"
-                            src={htmlPreviewUrl}
-                          />
-                        ) : (
-                          <div className="h-full flex flex-col items-center justify-center gap-3 bg-white p-4">
-                            <p className="text-sm text-gray-500">{htmlPreviewError || '网页预览不可用'}</p>
-                            {canDownloadViewingResource && (
-                              <button
-                                onClick={handleDownloadViewingResource}
-                                className="text-xs px-3 py-1.5 rounded-md border border-gray-200 text-gray-700 hover:text-gray-900 hover:border-gray-300"
-                              >
-                                下载文件
-                              </button>
-                            )}
-                          </div>
-                        )
-                      ) : isDownloadOnlyPreview || (!viewingResource.content && viewingSourceID) ? (
-                        <div className="h-full flex flex-col items-center justify-center gap-3 bg-white p-4">
-                          <p className="text-sm text-gray-500">该文件类型不支持内联预览，请直接下载查看。</p>
-                          <button
-                            onClick={handleDownloadViewingResource}
-                            className="text-xs px-3 py-1.5 rounded-md border border-gray-200 text-gray-700 hover:text-gray-900 hover:border-gray-300"
-                          >
-                            下载文件
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="h-full overflow-y-auto p-4 bg-white">
-                          <MarkdownRenderer content={viewingResource.content || '无内容'} />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
+              
+              {/* 预览面板 */}
+              {viewingResource && id && (
+                <ArtifactPreviewPanel
+                  viewingResource={viewingResource}
+                  projectId={id}
+                  isPreviewExpanded={isPreviewExpanded}
+                  onClose={() => {
+                    setViewingResource(null)
+                    setIsPreviewExpanded(false)
+                  }}
+                  onToggleExpand={() => setIsPreviewExpanded(v => !v)}
+                />
               )}
             </div>
           )}

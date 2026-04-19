@@ -40,3 +40,10 @@ assets/screenshots/
 backend/*.db
 .idea/
 bin/server
+.vscode/
+.qoder/
+backend/artifacts/
+backend/uploads/
+backend/logs
+backups/server
+backups/.env
