@@ -83,10 +83,10 @@ export function ChatInput({
         className={cn(
           'h-12 max-h-40 flex-1 resize-none bg-transparent p-3.5 text-sm outline-none',
           'text-zinc-900 placeholder:text-zinc-400 leading-6 dark:text-white dark:placeholder:text-white/50',
-          'min-h-[24px] max-h-[240px] overflow-y-auto',
+          'min-h-[24px] max-h-[240px] overflow-y-auto scrollbar-hide',
           composeLocked && 'opacity-50 cursor-not-allowed'
         )}
-        style={{ height: '48px' }}
+        style={{ height: '48px', scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       />
 
       {showStopButton ? (

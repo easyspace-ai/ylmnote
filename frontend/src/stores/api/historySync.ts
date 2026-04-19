@@ -15,7 +15,11 @@ interface FetchHistoryResult {
 }
 
 interface UpstreamMessage {
-  item_id: string | number
+  /** WebSocket update 帧使用 */
+  item_id?: string | number | null
+  /** HTTP GET /api/agents/.../messages（Go AgentMessage）使用 json:"id" */
+  id?: string | number | null
+  turn_number?: number
   kind?: string
   role?: string
   content?: string
@@ -26,6 +30,84 @@ interface UpstreamMessage {
   created_at?: number
   attachments?: any
   state?: any
+}
+
+/**
+ * 统一消息主键：HTTP 用 `id`，WS 用 `item_id`；缺失或为 0 时多条会撞同一键，必须用合成 id。
+ */
+export function stableMessageId(
+  msg: {
+    item_id?: string | number | null
+    id?: string | number | null
+    turn_number?: number
+    created_at?: number
+  },
+  sessionId: string,
+  index: number
+): string {
+  const raw = msg.item_id ?? msg.id
+  if (raw !== undefined && raw !== null && String(raw) !== 'undefined' && String(raw) !== '') {
+    const s = String(raw)
+    // 多条消息共用 item_id=0 时控制台会出现 ['0',2] 类重复，不能单独用 "0" 做主键
+    if (s !== '0') {
+      return s
+    }
+  }
+  const t = msg.turn_number ?? index
+  const c = msg.created_at ?? 0
+  return `syn:${sessionId}:${t}:${c}:${index}`
+}
+
+/**
+ * 合并多来源消息后的去重键：优先用上游 item_id/id（upstream_message_id），
+ * 避免 HTTP 下标生成的 syn: 与 WS 的数值 id 被当成两条。
+ */
+export function canonicalDedupeKey(m: TMessage): string {
+  if (m.id.startsWith('temp-')) {
+    return `temp:${m.id}`
+  }
+  const u = String(m.upstream_message_id ?? '').trim()
+  if (u && u !== 'undefined' && u !== '0' && u !== '') {
+    return `u:${u}`
+  }
+  return `id:${m.id}`
+}
+
+function pickRicherDuplicate(a: TMessage, b: TMessage): TMessage {
+  const aSyn = a.id.startsWith('syn:')
+  const bSyn = b.id.startsWith('syn:')
+  if (aSyn !== bSyn) {
+    return aSyn ? b : a
+  }
+  const la = a.content?.length ?? 0
+  const lb = b.content?.length ?? 0
+  if (la !== lb) {
+    return la >= lb ? a : b
+  }
+  if (/^\d+$/.test(a.id) && !/^\d+$/.test(b.id)) {
+    return a
+  }
+  if (/^\d+$/.test(b.id) && !/^\d+$/.test(a.id)) {
+    return b
+  }
+  return a
+}
+
+/** 多来源合并后必须调用，消除「同一条上游消息」因 id 表示不一致产生的重复气泡 */
+export function dedupeMessagesByCanonicalKey(messages: TMessage[]): TMessage[] {
+  const map = new Map<string, TMessage>()
+  for (const m of messages) {
+    const k = canonicalDedupeKey(m)
+    const existing = map.get(k)
+    if (!existing) {
+      map.set(k, m)
+    } else {
+      map.set(k, pickRicherDuplicate(existing, m))
+    }
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  )
 }
 
 function getAuthToken(): string | null {
@@ -44,8 +126,14 @@ function getAuthToken(): string | null {
 /**
  * 将上游消息格式转换为本地消息格式
  */
-function convertUpstreamMessage(msg: UpstreamMessage, projectId: string, sessionId: string): TMessage {
-  const id = String(msg.item_id)
+function convertUpstreamMessage(
+  msg: UpstreamMessage,
+  projectId: string,
+  sessionId: string,
+  index: number
+): TMessage {
+  const id = stableMessageId(msg, sessionId, index)
+  const rawUpstream = msg.item_id ?? msg.id
 
   // 提取文本内容
   let content = msg.content || ''
@@ -74,7 +162,7 @@ function convertUpstreamMessage(msg: UpstreamMessage, projectId: string, session
 
   return {
     id,
-    upstream_message_id: id,
+    upstream_message_id: rawUpstream != null ? String(rawUpstream) : id,
     project_id: projectId,
     session_id: sessionId,
     role,
@@ -149,8 +237,10 @@ export async function fetchHistory(
     upstreamMessages = []
   }
 
-  // 转换为本地消息格式
-  const messages = upstreamMessages.map((msg) => convertUpstreamMessage(msg, projectId, sessionId))
+  // 转换为本地消息格式（带序号，避免 item_id 为 0 / 缺失时撞键）
+  const messages = upstreamMessages.map((msg, index) =>
+    convertUpstreamMessage(msg, projectId, sessionId, index)
+  )
 
   return {
     messages,
@@ -179,7 +269,7 @@ export async function fetchIncrementalHistory(
  */
 export function mergeMessages(cached: TMessage[], upstream: TMessage[]): TMessage[] {
   const map = new Map<string, TMessage>()
-  let duplicateCount = 0
+  let upstreamOverlapCount = 0
   let tempReplacedCount = 0
   let tempPreservedCount = 0
 
@@ -192,7 +282,7 @@ export function mergeMessages(cached: TMessage[], upstream: TMessage[]): TMessag
   upstream.forEach((m) => {
     if (map.has(m.id)) {
       const existing = map.get(m.id)!
-      duplicateCount++
+      upstreamOverlapCount++
       // 如果本地是临时消息，且上游有确认，替换临时消息
       if (existing.id.startsWith('temp-')) {
         // 检查内容是否匹配（确认是同一个消息）
@@ -216,17 +306,19 @@ export function mergeMessages(cached: TMessage[], upstream: TMessage[]): TMessag
     }
   })
 
-  const result = Array.from(map.values()).sort(
+  let result = Array.from(map.values()).sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   )
 
-  // 调试日志：当检测到重复时输出
-  if (duplicateCount > 0 || tempReplacedCount > 0 || tempPreservedCount > 0) {
+  result = dedupeMessagesByCanonicalKey(result)
+
+  // 与缓存同 id 的上游行数（刷新历史时多数会「重叠」，属正常，勿与「重复气泡」混为一谈）
+  if (upstreamOverlapCount > 0 || tempReplacedCount > 0 || tempPreservedCount > 0) {
     console.log('[mergeMessages] merge stats', {
       cachedCount: cached.length,
       upstreamCount: upstream.length,
       resultCount: result.length,
-      duplicateCount,
+      upstreamOverlapCount,
       tempReplacedCount,
       tempPreservedCount,
     })

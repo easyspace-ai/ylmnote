@@ -226,7 +226,6 @@ export function MessageList({
               className="h-14 w-14 object-contain rounded-xl"
             />
           </div>
-            <p className="mb-1 text-xl text-zinc-900 dark:text-white">How can I help you today?</p>
           </div>
         )
       )}

@@ -696,69 +696,6 @@ export default function ProjectDetail() {
     localStorage.setItem(getLastSessionStorageKey(id), urlSessionId)
   }, [id, urlSessionId])
 
-  // 活跃度检测与动态刷新：根据用户活跃程度调整历史消息刷新频率
-  const lastActivityRef = useRef<number>(Date.now())
-  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // 更新最后活跃时间（当有新消息时）
-  useEffect(() => {
-    if (messages.length > 0) {
-      lastActivityRef.current = Date.now()
-    }
-  }, [messages])
-
-  // 动态刷新定时器
-  useEffect(() => {
-    if (!id || !urlSessionId) return
-
-    const setupRefreshTimer = () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current)
-      }
-
-      const idleTime = Date.now() - lastActivityRef.current
-      let intervalMs: number
-
-      // 根据活跃度动态调整刷新间隔
-      if (idleTime < 30000) {
-        // 30秒内活跃：30秒刷新（用户在聊天中）
-        intervalMs = 30000
-      } else if (idleTime < 300000) {
-        // 5分钟内活跃：2分钟刷新
-        intervalMs = 120000
-      } else {
-        // 长时间不活跃：5分钟刷新
-        intervalMs = 300000
-      }
-
-      refreshIntervalRef.current = setInterval(() => {
-        const currentIdle = Date.now() - lastActivityRef.current
-
-        // 如果空闲时间超过阈值，执行增量刷新
-        if (currentIdle > 30000) {
-          console.log('[ActivityRefresh] Running incremental refresh', { sessionId: urlSessionId, idleMs: currentIdle })
-          // 使用 cache=false 强制刷新，但保留现有消息
-          fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest', useCache: true })
-            .catch((err) => console.error('[ActivityRefresh] Refresh failed:', err))
-        }
-
-        // 重新计算下一次间隔
-        setupRefreshTimer()
-      }, intervalMs)
-
-      console.log('[ActivityRefresh] Timer setup', { intervalMs, idleTime })
-    }
-
-    setupRefreshTimer()
-
-    return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current)
-        refreshIntervalRef.current = null
-      }
-    }
-  }, [id, urlSessionId, fetchMessagesBySession])
-
   const queryClient = useQueryClient()
   const { confirm, prompt } = useDialog()
 

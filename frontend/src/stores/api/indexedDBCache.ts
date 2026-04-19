@@ -1,6 +1,7 @@
 import type { Message as TMessage } from '@/types'
 
-const DB_NAME = 'chat_cache_v1'
+/** v2: 丢弃旧版可能含重复/错误 id 的缓存（syn: 与 item_id 混用等） */
+const DB_NAME = 'chat_cache_v2'
 const DB_VERSION = 1
 const STORE_MESSAGES = 'messages'
 const STORE_SESSION_META = 'session_meta'
@@ -214,7 +215,8 @@ export async function appendMessage(sessionId: string, message: TMessage): Promi
 
   if (count > MAX_MESSAGES_PER_SESSION) {
     // 删除最旧的消息
-    const cursorRequest = index.openCursor(range, 'next')
+    const keyRange = IDBKeyRange.only(sessionId)
+    const cursorRequest = index.openCursor(keyRange, 'next')
     let deleted = 0
     const toDelete = count - MAX_MESSAGES_PER_SESSION
 

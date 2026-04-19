@@ -28,8 +28,8 @@ export function StreamingIndicator({
   if (variant === 'pulse') {
     return (
       <div className={cn('flex items-center gap-2', className)}>
-        <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
-        <span className="text-xs text-gray-500">生成中...</span>
+        {/* <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+        <span className="text-xs text-gray-500">生成中...</span> */}
       </div>
     )
   }

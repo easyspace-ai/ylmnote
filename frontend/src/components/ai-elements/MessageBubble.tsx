@@ -27,7 +27,7 @@ function StatusIndicator({ status }: { status?: MessageStatus }) {
 
   const statusConfig = {
     streaming: {
-      text: '生成中...',
+      text: '',
       className: 'text-indigo-600',
       bgClass: 'bg-indigo-50',
       borderClass: 'border-indigo-200',
