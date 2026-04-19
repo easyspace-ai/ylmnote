@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, ArrowRight, FileText, Search, Wand2, Code } from 'lucide-react'
+import { ArrowRight, FileText, Search, Wand2, Code } from 'lucide-react'
 import { cn } from '@/utils'
 import { useAppStore } from '@/stores/apiStore'
 import { queryClient } from '@/lib/queryClient'
@@ -104,9 +104,11 @@ export default function HomePage() {
 
         {/* ── Header ───────────────────────────────────── */}
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-white" />
-          </div>
+          <img
+            src="/logo.jpg"
+            alt="MetaNote"
+            className="w-10 h-10 rounded-xl object-cover"
+          />
           <h1 className="font-bold text-2xl text-gray-900 tracking-tight">
             有什么可以帮你的？
           </h1>

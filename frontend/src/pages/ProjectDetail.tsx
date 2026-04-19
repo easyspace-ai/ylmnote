@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/utils'
 import { useToast } from '@/components/ui/Feedback'
+import { useDialog } from '@/components/ui/Dialog'
 
 import AIChatBoxNew, { type ChatMessage, type Skill, type Attachment } from '@/components/AIChatBoxNew'
 import type { MessageStatus } from '@/components/ai-elements'
@@ -631,16 +632,13 @@ export default function ProjectDetail() {
   useEffect(() => {
     setActiveMessageSession(urlSessionId)
     if (id && urlSessionId) {
+      // 切换路由时先清空，避免短暂显示上一会话；拉取失败时 fetchMessagesBySession 不再二次清空，故不会「闪一下又空」。
+      clearSessionMessages()
       void (async () => {
         await fetchSessions(id)
         await fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
-        // 建立 WebSocket 连接
+        // 建立 WebSocket 连接（对话真源在上游；本地库不再缓存消息，故不做延迟二次 HTTP 拉取以免用空列表覆盖 WS 内容）
         connectWebSocket(urlSessionId, id)
-        // 后端会在对话完成后异步回填 timeline；延迟再拉一次确保切回会话时拿到完整历史。
-        window.setTimeout(() => {
-          if (useAppStore.getState().activeMessageSessionId !== urlSessionId) return
-          void fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
-        }, 1200)
       })()
     } else if (urlSessionId) {
       clearSessionMessages(urlSessionId)
@@ -698,7 +696,71 @@ export default function ProjectDetail() {
     localStorage.setItem(getLastSessionStorageKey(id), urlSessionId)
   }, [id, urlSessionId])
 
+  // 活跃度检测与动态刷新：根据用户活跃程度调整历史消息刷新频率
+  const lastActivityRef = useRef<number>(Date.now())
+  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // 更新最后活跃时间（当有新消息时）
+  useEffect(() => {
+    if (messages.length > 0) {
+      lastActivityRef.current = Date.now()
+    }
+  }, [messages])
+
+  // 动态刷新定时器
+  useEffect(() => {
+    if (!id || !urlSessionId) return
+
+    const setupRefreshTimer = () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current)
+      }
+
+      const idleTime = Date.now() - lastActivityRef.current
+      let intervalMs: number
+
+      // 根据活跃度动态调整刷新间隔
+      if (idleTime < 30000) {
+        // 30秒内活跃：30秒刷新（用户在聊天中）
+        intervalMs = 30000
+      } else if (idleTime < 300000) {
+        // 5分钟内活跃：2分钟刷新
+        intervalMs = 120000
+      } else {
+        // 长时间不活跃：5分钟刷新
+        intervalMs = 300000
+      }
+
+      refreshIntervalRef.current = setInterval(() => {
+        const currentIdle = Date.now() - lastActivityRef.current
+
+        // 如果空闲时间超过阈值，执行增量刷新
+        if (currentIdle > 30000) {
+          console.log('[ActivityRefresh] Running incremental refresh', { sessionId: urlSessionId, idleMs: currentIdle })
+          // 使用 cache=false 强制刷新，但保留现有消息
+          fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest', useCache: true })
+            .catch((err) => console.error('[ActivityRefresh] Refresh failed:', err))
+        }
+
+        // 重新计算下一次间隔
+        setupRefreshTimer()
+      }, intervalMs)
+
+      console.log('[ActivityRefresh] Timer setup', { intervalMs, idleTime })
+    }
+
+    setupRefreshTimer()
+
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current)
+        refreshIntervalRef.current = null
+      }
+    }
+  }, [id, urlSessionId, fetchMessagesBySession])
+
   const queryClient = useQueryClient()
+  const { confirm, prompt } = useDialog()
 
   const [stoppingUpstream, setStoppingUpstream] = useState(false)
 
@@ -717,7 +779,12 @@ export default function ProjectDetail() {
 
   const handleProjectRename = async () => {
     if (!id || !currentProject) return
-    const newName = prompt(`重命名对话:`, currentProject.name)
+    const newName = await prompt({
+      title: '重命名对话',
+      message: '请输入新的对话名称',
+      defaultValue: currentProject.name,
+      placeholder: '对话名称',
+    })
     if (newName && newName !== currentProject.name) {
       await updateProject(id, { name: newName })
       await fetchProject(id)
@@ -727,7 +794,13 @@ export default function ProjectDetail() {
 
   const handleProjectArchive = async () => {
     if (!id || !currentProject) return
-    if (confirm(`确定要归档当前对话 "${currentProject.name}" 吗？`)) {
+    const confirmed = await confirm({
+      title: '归档项目',
+      message: `确定要归档当前对话 "${currentProject.name}" 吗？`,
+      confirmText: '归档',
+      cancelText: '取消',
+    })
+    if (confirmed) {
       await updateProject(id, { status: 'archived' })
       addToast('success', '对话已归档')
       void queryClient.invalidateQueries({ queryKey: ['projects'] })
@@ -906,18 +979,17 @@ export default function ProjectDetail() {
     }
   })
 
-  const applyStudioToolPrompt = (tool: (typeof studioTools)[number]) => {
+  /** 选中 Studio 技能 — 不再填入提示词，而是作为标签显示在输入框 */
+  const handleSelectStudioTool = (tool: (typeof studioTools)[number] | null) => {
     if (isStreaming) {
       addToast('info', '当前正在生成中，请稍后再试')
       return
     }
-    setActiveStudioTool(tool.id)
-    setIsRightCollapsed(false)
-    if (!tool.prompt?.trim()) {
-      addToast('error', `「${tool.label}」未配置提示词`)
-      return
+    if (tool) {
+      setActiveStudioTool(tool.id)
+    } else {
+      setActiveStudioTool(null)
     }
-    setStudioInputPrefill({ text: tool.prompt.trim(), seq: Date.now() })
   }
 
   /** Studio 产物列表项下载：优先走 source: 下载，否则预留 artifact download API */
@@ -967,7 +1039,11 @@ export default function ProjectDetail() {
   
   const handleAddLink = async () => {
     if (!id) return;
-    const url = prompt('请输入你要添加的网页链接 (例如: https://example.com):', '');
+    const url = await prompt({
+      title: '添加链接',
+      message: '请输入你要添加的网页链接',
+      placeholder: '例如: https://example.com',
+    });
     if (!url) return;
     try {
       addToast('info', '正在抓取链接内容...');
@@ -982,7 +1058,12 @@ export default function ProjectDetail() {
 
   const handleAddNote = async () => {
     if (!id) return;
-    const name = prompt('笔记标题:', '新笔记');
+    const name = await prompt({
+      title: '新建笔记',
+      message: '请输入笔记标题',
+      defaultValue: '新笔记',
+      placeholder: '笔记标题',
+    });
     if (!name) return;
     try {
       await createResource(id, { type: 'note', name: name, content: '' });
@@ -997,7 +1078,12 @@ export default function ProjectDetail() {
     if (!id) return;
     const resource = resources.find(r => r.id === resId);
     if (!resource) return;
-    const newName = prompt(`重命名:`, resource.name);
+    const newName = await prompt({
+      title: '重命名',
+      message: '请输入新的名称',
+      defaultValue: resource.name,
+      placeholder: '名称',
+    });
     if (newName && newName !== resource.name) {
       try {
         await updateResource(id, resId, { name: newName });
@@ -1010,7 +1096,14 @@ export default function ProjectDetail() {
   
   const handleDelete = async (type: string, resId: string) => {
     if(!id) return;
-    if(confirm('确定要删除此资源吗？')) {
+    const confirmed = await confirm({
+      title: '删除资源',
+      message: '确定要删除此资源吗？此操作不可恢复。',
+      variant: 'danger',
+      confirmText: '删除',
+      cancelText: '取消',
+    });
+    if(confirmed) {
       try { 
         await deleteResource(id, resId); 
         fetchResources(id);
@@ -1366,14 +1459,27 @@ export default function ProjectDetail() {
                             <div className={cn("absolute right-2 opacity-0 group-hover:opacity-100 transition-opacity", isActive ? "opacity-100" : "")}>
                               <MoreMenu 
                                 onRename={async () => {
-                                  const newName = prompt('重命名对话:', s.title)
+                                  const newName = await prompt({
+                                    title: '重命名对话',
+                                    message: '请输入新的对话名称',
+                                    defaultValue: s.title,
+                                    placeholder: '对话名称',
+                                  })
                                   if (newName && newName !== s.title && id) {
                                     await updateSession(id, s.id, newName)
                                     fetchSessions(id)
                                   }
                                 }} 
                                 onDelete={async () => {
-                                  if (!id || !confirm('确定要删除这条对话吗？')) return
+                                  if (!id) return
+                                  const confirmed = await confirm({
+                                    title: '删除对话',
+                                    message: '确定要删除这条对话吗？此操作不可恢复。',
+                                    variant: 'danger',
+                                    confirmText: '删除',
+                                    cancelText: '取消',
+                                  })
+                                  if (!confirmed) return
                                   await deleteSession(id, s.id)
                                   fetchSessions(id)
                                   if (isActive) {
@@ -1416,7 +1522,8 @@ export default function ProjectDetail() {
               messages={chatMessages}
               todoItems={chatTodoItems}
               studioActions={studioTools}
-              onRunStudioTool={(tool) => applyStudioToolPrompt(tool)}
+              activeStudioToolId={activeStudioTool}
+              onStudioToolSelect={(tool) => handleSelectStudioTool(tool as typeof studioTools[number] | null)}
               libraryFiles={libraryFiles}
               upstreamInputLocked={uploading}
               upstreamCanStop={Boolean(urlSessionId && isStreaming)}
@@ -1432,7 +1539,12 @@ export default function ProjectDetail() {
               onSaveAsDocument={async (content) => {
                 if (id) {
                   const defaultName = 'AI 提取 (' + new Date().toLocaleTimeString() + ')'
-                  const name = prompt('为这段抽取的知识命名:', defaultName)
+                  const name = await prompt({
+                    title: '保存为文档',
+                    message: '为这段抽取的知识命名',
+                    defaultValue: defaultName,
+                    placeholder: '文档名称',
+                  })
                   if (!name) return
                   await createResource(id, { type: 'output', name, content, session_id: urlSessionId })
                   fetchResources(id)
@@ -1478,25 +1590,42 @@ export default function ProjectDetail() {
               {/* Studio 功能网格 */}
               <div className="flex-shrink-0 border-b border-gray-100 px-3 py-3 bg-gray-50/60">
                 <div className="grid grid-cols-2 gap-2">
-                  {studioTools.map(tool => (
-                    <button
-                      key={tool.id}
-                      onClick={() => applyStudioToolPrompt(tool)}
-                      disabled={isStreaming}
-                      className={cn(
-                        'relative flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-left shadow-sm transition-all duration-150',
-                        'bg-gradient-to-br',
-                        tool.color,
-                        activeStudioTool === tool.id
-                          ? 'ring-2 ring-primary-500/60 shadow-md'
-                          : 'hover:shadow-md hover:-translate-y-0.5',
-                        isStreaming && 'opacity-60 cursor-not-allowed'
-                      )}
-                    >
-                      <span className={cn('truncate', tool.textColor)}>{tool.label}</span>
-                      <span className="ml-2 text-[10px] text-gray-400">AI</span>
-                    </button>
-                  ))}
+                  {studioTools.map(tool => {
+                    const isSelected = activeStudioTool === tool.id
+                    return (
+                      <button
+                        key={tool.id}
+                        onClick={() => {
+                          if (isStreaming) {
+                            addToast('info', '当前正在生成中，请稍后再试')
+                            return
+                          }
+                          // 点击已选中的技能则取消选择，否则选中
+                          handleSelectStudioTool(isSelected ? null : tool)
+                        }}
+                        disabled={isStreaming}
+                        className={cn(
+                          'relative flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-left shadow-sm transition-all duration-150',
+                          'bg-gradient-to-br',
+                          tool.color,
+                          isSelected
+                            ? 'ring-2 ring-primary-500/60 shadow-md scale-[1.02]'
+                            : 'hover:shadow-md hover:-translate-y-0.5',
+                          isStreaming && 'opacity-60 cursor-not-allowed'
+                        )}
+                      >
+                        <span className={cn('truncate', tool.textColor)}>{tool.label}</span>
+                        <span className="ml-2 text-[10px] text-gray-400">AI</span>
+                        {isSelected && (
+                          <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary-500 text-white rounded-full flex items-center justify-center text-[10px]">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
                 {studioTools.length === 0 && (
                   <p className="text-xs text-gray-400 text-center py-2">

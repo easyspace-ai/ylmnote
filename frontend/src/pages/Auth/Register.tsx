@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { authApi } from '@/services/api'
-import { Sparkles, Eye, EyeOff, ArrowRight, Github, Mail, Check, X } from 'lucide-react'
+import { Eye, EyeOff, ArrowRight, Github, Mail, Check, X } from 'lucide-react'
 import { cn } from '@/utils'
 
 export default function Register() {
@@ -73,9 +73,11 @@ export default function Register() {
         <div className="absolute bottom-20 right-20 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl" />
         
         <div className="relative z-10 flex flex-col justify-center px-16 text-white">
-          <div className="w-16 h-16 mb-8 bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center">
-            <Sparkles size={32} className="text-white" />
-          </div>
+          <img
+            src="/logo.jpg"
+            alt="MetaNote"
+            className="w-16 h-16 mb-8 rounded-2xl object-cover shadow-lg ring-1 ring-white/25"
+          />
           <h1 className="text-4xl font-bold mb-6 leading-tight">
             开启你的<br />
             <span className="text-primary-200">AI 之旅</span>
@@ -103,9 +105,11 @@ export default function Register() {
         <div className="w-full max-w-md mx-auto">
           {/* Logo */}
           <div className="flex items-center gap-3 mb-8 lg:hidden">
-            <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center shadow-lg shadow-primary-500/25">
-              <Sparkles size={20} className="text-white" />
-            </div>
+            <img
+              src="/logo.jpg"
+              alt="MetaNote"
+              className="w-10 h-10 rounded-xl object-cover shadow-lg shadow-primary-500/25"
+            />
             <span className="text-xl font-bold text-gray-900">MetaNote</span>
           </div>
           

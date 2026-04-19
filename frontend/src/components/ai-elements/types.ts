@@ -94,3 +94,8 @@ export interface StudioAction {
   color: string
   textColor: string
 }
+
+/** 选中的 Studio 动作 */
+export interface SelectedStudioAction extends StudioAction {
+  isActive: boolean
+}

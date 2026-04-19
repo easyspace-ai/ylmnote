@@ -5,54 +5,21 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c4873d76-20a5-4a5c-a543-f4ffe3969e6b" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.github/workflows/ci.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/ci.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/cmd/chat-stream-test/main.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/cmd/kimi/main.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/application/chat/service.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/application/chat/service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/application/chat/service_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/application/chat/service_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/application/project/service.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/application/project/service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/application/w6/service.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/config/config.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/domain/project/entity.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/domain/project/entity.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/client.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/gateway/stream/sse.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/legacy_sdk_adapter.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/w6_client.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/w6_ws.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/errors.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/errors.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/models.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/models.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/session_repo.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/persistence/session_repo.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/chat_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/chat_handler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/middleware.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/middleware.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/project_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/project_handler.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/router.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/metanote.db" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/doc/REMOTE_SESSION_AND_DATA_FLOW.md" beforeDir="false" afterPath="$PROJECT_DIR$/doc/bak/REMOTE_SESSION_AND_DATA_FLOW.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/doc/bak/THIRD_PARTY_INTEGRATION.md" beforeDir="false" afterPath="$PROJECT_DIR$/doc/THIRD_PARTY_INTEGRATION.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/doc/chatgpt.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/doc/bak/chatgpt.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/doc/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/doc/bak/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/doc/realtime_session_pool_plan_1b7132cf.plan.md" beforeDir="false" afterPath="$PROJECT_DIR$/doc/bak/realtime_session_pool_plan_1b7132cf.plan.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/doc/动态讲义.txt" beforeDir="false" afterPath="$PROJECT_DIR$/doc/bak/动态讲义.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/AIChatBoxNew.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/AIChatBoxNew.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/MessageList.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/MessageList.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/config/ai.ts" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/config/api.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/config/api.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/ws_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/ws_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/doc/bak/tsconfig.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/layout/Sidebar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/layout/Sidebar.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/main.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/Auth/Login.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/Auth/Login.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/Auth/Register.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/Auth/Register.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/HomePage.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/HomePage.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/NewProject.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/NewProject.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/services/ai.ts" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/services/ai/errors.ts" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/services/api.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/services/api.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/ProjectList.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/ProjectList.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/stores/api/sessionMessageCache.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/api/sessionMessageCache.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/stores/apiStore.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/apiStore.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/types/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/types/index.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/vite.config.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/vite.config.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/metanote.db" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/sdk/sdk/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/sdk/sdk/client.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

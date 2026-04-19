@@ -1,8 +1,16 @@
+/**
+ * @deprecated 已弃用 - 请使用 indexedDBCache.ts
+ * 该模块仅保留用于向后兼容，新代码应使用 IndexedDB 缓存层
+ * 迁移指南：将 readSessionMessageCache/writeSessionMessageCache 调用替换为
+ * indexedDBCache.getMessagesBySession / indexedDBCache.setMessages
+ */
 import type { Message as TMessage } from '@/types'
 
 const SESSION_MESSAGE_CACHE_LIMIT = 20
 /** v3：移除 upstream_session_id 绑定 */
 const SESSION_MESSAGE_CACHE_VERSION = 3
+
+console.warn('[sessionMessageCache] This module is deprecated. Please migrate to indexedDBCache.ts')
 
 function getSessionMessageCacheKey(projectId: string, sessionId: string) {
   return `youmind:session-messages:v${SESSION_MESSAGE_CACHE_VERSION}:${projectId}:${sessionId}`

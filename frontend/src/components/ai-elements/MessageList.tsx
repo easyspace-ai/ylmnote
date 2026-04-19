@@ -219,9 +219,13 @@ export function MessageList({
           </div>
         ) : (
           <div className="flex h-full select-none flex-col items-center justify-center text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-3xl border shadow dark:border-white/15">
-              <span className="text-sm font-semibold text-zinc-700 dark:text-white">C</span>
-            </div>
+          <div className="mb-4 flex h-16 w-16 items-center justify-center">
+            <img
+              src="/logo.jpg"
+              alt="MetaNote"
+              className="h-14 w-14 object-contain rounded-xl"
+            />
+          </div>
             <p className="mb-1 text-xl text-zinc-900 dark:text-white">How can I help you today?</p>
           </div>
         )

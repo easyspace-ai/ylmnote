@@ -27,7 +27,7 @@ import { ModeSelector } from './ModeSelector'
 import { ModelSelector } from './ModelSelector'
 import { StudioActionsPopover } from './StudioActionsPopover'
 import { ResourcePickerPopover } from './ResourcePickerPopover'
-import { HardDrive, Folder, Zap } from 'lucide-react'
+import { HardDrive, Folder, Zap, X } from 'lucide-react'
 
 interface AIChatProps {
   // 数据
@@ -37,6 +37,9 @@ interface AIChatProps {
   todoItems?: TodoItem[]
   /** 与右侧 Studio 栏一致的动作列表 */
   studioActions?: StudioAction[]
+  /** 激活指定 Studio 动作（改为选中模式而非填入提示词） */
+  activeStudioToolId?: string | null
+  onStudioToolSelect?: (action: StudioAction | null) => void
   onRunStudioTool?: (action: StudioAction) => void | Promise<void>
   /** 将文本写入输入框（不发送），seq 每次变化时应用 */
   inputPrefill?: { seq: number; text: string }
@@ -87,6 +90,8 @@ export function AIChat({
   libraryFiles = [],
   todoItems = [],
   studioActions = [],
+  activeStudioToolId,
+  onStudioToolSelect,
   onRunStudioTool,
   inputPrefill,
   isStreaming = false,
@@ -122,6 +127,17 @@ export function AIChat({
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [showStudioPicker, setShowStudioPicker] = useState(false)
   const [showResourcePicker, setShowResourcePicker] = useState(false)
+  const [selectedStudioTool, setSelectedStudioTool] = useState<StudioAction | null>(null)
+
+  // 同步外部传入的 activeStudioToolId
+  useEffect(() => {
+    if (activeStudioToolId) {
+      const tool = studioActions.find(t => t.id === activeStudioToolId)
+      if (tool) {
+        setSelectedStudioTool(tool)
+      }
+    }
+  }, [activeStudioToolId, studioActions])
 
   const triggersSlashMenu = (v: string) => {
     if (!v.endsWith('/')) return false
@@ -182,13 +198,16 @@ export function AIChat({
 
     onSendMessage(inputValue, {
       mode,
-      skill: null,
+      skill: selectedStudioTool?.id || null,
       attachments,
       model: selectedModel,
     })
 
     setInputValue('')
     setAttachments([])
+    // 发送后清除选中的技能
+    setSelectedStudioTool(null)
+    onStudioToolSelect?.(null)
   }, [
     inputValue,
     isStreaming,
@@ -196,7 +215,9 @@ export function AIChat({
     mode,
     attachments,
     selectedModel,
+    selectedStudioTool,
     onSendMessage,
+    onStudioToolSelect,
   ])
 
   const handleStopGeneration = useCallback(() => {
@@ -327,12 +348,17 @@ export function AIChat({
           )}
 
           {/* 输入框容器 */}
-          <div className="relative overflow-visible rounded-3xl border border-zinc-200 bg-white pl-2 shadow-sm transition-all duration-200 focus-within:border-zinc-300 dark:border-none dark:bg-white/5">
-            {showStudioPicker && onRunStudioTool && (
+          <div className="relative overflow-visible rounded border border-zinc-200 bg-white pl-2 shadow-sm transition-all duration-200 focus-within:border-zinc-300 dark:border-none dark:bg-white/5">
+            {showStudioPicker && (
               <StudioActionsPopover
                 tools={studioActions}
+                selectedToolId={selectedStudioTool?.id}
                 onClose={() => setShowStudioPicker(false)}
-                onPick={(tool) => void onRunStudioTool(tool)}
+                onPick={(tool) => {
+                  setSelectedStudioTool(tool)
+                  onStudioToolSelect?.(tool)
+                  setShowStudioPicker(false)
+                }}
                 onExploreMore={() => navigate('/skills')}
                 onManage={() => navigate('/settings')}
               />
@@ -402,31 +428,53 @@ export function AIChat({
 
               <div className="h-4 w-px bg-zinc-200 dark:bg-white/10" />
 
-              {/* 模式选择 */}
-              {/* <ModeSelector mode={mode} onChange={handleModeChange} /> */}
-
-              {/* <div className="w-px h-4 bg-gray-200" /> */}
-
-              {/* Studio 动作（与右侧栏一致） */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (upstreamInputLocked || isStreaming) return
-                  setShowResourcePicker(false)
-                  setShowStudioPicker((v) => !v)
-                }}
-                disabled={upstreamInputLocked || isStreaming || !onRunStudioTool}
-                className={cn(
-                  'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all duration-200',
-                  showStudioPicker
-                    ? 'border-zinc-300 bg-zinc-100 text-zinc-800 dark:border-white/20 dark:bg-white/10 dark:text-white'
-                    : 'border-zinc-200 bg-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 dark:border-white/10 dark:text-white/60 dark:hover:border-white/20 dark:hover:text-white',
-                  (!onRunStudioTool || upstreamInputLocked || isStreaming) && 'cursor-not-allowed opacity-50'
-                )}
-              >
-                <Zap size={12} className={showStudioPicker ? 'text-zinc-700 dark:text-white' : 'text-zinc-400 dark:text-white/40'} />
-                <span>技能</span>
-              </button>
+              {/* 已选中的 Studio 技能标签（替代技能按钮） */}
+              {selectedStudioTool ? (
+                <div
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all duration-200',
+                    'bg-gradient-to-br shadow-sm',
+                    selectedStudioTool.color,
+                    selectedStudioTool.textColor,
+                    'border-white/20'
+                  )}
+                >
+                  <span>{selectedStudioTool.label}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setSelectedStudioTool(null)
+                      onStudioToolSelect?.(null)
+                    }}
+                    className="ml-0.5 p-0.5 hover:bg-black/10 rounded-full transition-colors"
+                    title="移除技能"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ) : (
+                /* Studio 动作（与右侧栏一致） */
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (upstreamInputLocked || isStreaming) return
+                    setShowResourcePicker(false)
+                    setShowStudioPicker((v) => !v)
+                  }}
+                  disabled={upstreamInputLocked || isStreaming}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all duration-200',
+                    showStudioPicker
+                      ? 'border-zinc-300 bg-zinc-100 text-zinc-800 dark:border-white/20 dark:bg-white/10 dark:text-white'
+                      : 'border-zinc-200 bg-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 dark:border-white/10 dark:text-white/60 dark:hover:border-white/20 dark:hover:text-white',
+                    (upstreamInputLocked || isStreaming) && 'cursor-not-allowed opacity-50'
+                  )}
+                >
+                  <Zap size={12} className={showStudioPicker ? 'text-zinc-700 dark:text-white' : 'text-zinc-400 dark:text-white/40'} />
+                  <span>技能</span>
+                </button>
+              )}
 
               {/* <div className="w-px h-4 bg-gray-200" /> */}
 

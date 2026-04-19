@@ -8,6 +8,7 @@ import { useAppStore } from '@/stores/apiStore'
 import { useProjectsList } from '@/hooks/useProjectsList'
 import { queryClient } from '@/lib/queryClient'
 import { Link, useNavigate } from 'react-router-dom'
+import { useDialog } from '@/components/ui/Dialog'
 
 type FilterType = 'recent' | 'active' | 'archived'
 type ViewMode = 'grid' | 'list'
@@ -74,6 +75,7 @@ export default function ProjectList() {
   const navigate = useNavigate()
   const { createProject, updateProject, deleteProject } = useAppStore()
   const { data: projects = [], isFetching: loading } = useProjectsList()
+  const { confirm, prompt } = useDialog()
   
   const [searchQuery, setSearchQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState<FilterType>('recent')
@@ -103,7 +105,12 @@ export default function ProjectList() {
   const handleRename = async (id: string) => {
     const project = projects.find(p => p.id === id)
     if (!project) return
-    const newName = prompt('重命名项目:', project.name)
+    const newName = await prompt({
+      title: '重命名项目',
+      message: '请输入新的项目名称',
+      defaultValue: project.name,
+      placeholder: '项目名称',
+    })
     if (newName && newName !== project.name) {
       await updateProject(id, { name: newName } as any)
       void queryClient.invalidateQueries({ queryKey: ['projects'] })
@@ -121,7 +128,14 @@ export default function ProjectList() {
   }
 
   const handleDelete = async (id: string) => {
-    if (window.confirm("确定要删除这个项目吗？")) {
+    const confirmed = await confirm({
+      title: '删除项目',
+      message: '确定要删除这个项目吗？此操作不可恢复。',
+      variant: 'danger',
+      confirmText: '删除',
+      cancelText: '取消',
+    })
+    if (confirmed) {
       try {
         await deleteProject(id)
         void queryClient.invalidateQueries({ queryKey: ['projects'] })

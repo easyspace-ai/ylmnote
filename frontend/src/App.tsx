@@ -8,7 +8,6 @@ import ProjectList from '@/pages/ProjectList'
 import ProjectDetail from '@/pages/ProjectDetail'
 import SkillList from '@/pages/SkillList'
 import Settings from '@/pages/Settings'
-import NewProject from "@/pages/NewProject"
 import Login from '@/pages/Auth/Login'
 import Register from '@/pages/Auth/Register'
 import { ToastProvider } from '@/components/ui/Feedback'
@@ -44,7 +43,6 @@ function App() {
                 <Route path="/" element={<HomePage />} />
                 <Route path="/search" element={<SearchPage />} />
                 <Route path="/boards" element={<ProjectList />} />
-                <Route path="/boards/new" element={<NewProject />} />
                 <Route path="/boards/:id/sessions/:sessionId" element={<ProjectDetail />} />
                 <Route path="/boards/:id" element={<ProjectDetail />} />
                 <Route path="/skills" element={<SkillList />} />
@@ -61,7 +59,6 @@ function App() {
               <Routes>
                 <Route path="/search" element={<SearchPage />} />
                 <Route path="/boards" element={<ProjectList />} />
-                <Route path="/boards/new" element={<NewProject />} />
                 <Route path="/boards/:id/sessions/:sessionId" element={<ProjectDetail />} />
                 <Route path="/boards/:id" element={<ProjectDetail />} />
                 <Route path="/skills" element={<SkillList />} />

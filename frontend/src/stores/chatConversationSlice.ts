@@ -3,6 +3,8 @@
  */
 import { SessionWebSocket } from '@/services/ws'
 import { projectApi } from '@/services/api'
+import * as indexedDBCache from './api/indexedDBCache'
+import * as historySync from './api/historySync'
 import type { Message as TMessage } from '@/types'
 
 /** artifact 刷新防抖定时器 */
@@ -120,42 +122,92 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
                     message_kind: messageKind,
                     turn_number: msg.turn_number,
                   },
-                  created_at: msg.created_at 
-                    ? new Date(msg.created_at * 1000).toISOString() 
+                  created_at: msg.created_at
+                    ? new Date(msg.created_at * 1000).toISOString()
                     : new Date().toISOString(),
                 } as TMessage
               })
 
-            // 更新消息列表 - 合并而不是替换，保留已有消息
-            set((state: any) => {
-              // 上游 from_user 消息的内容集合，用于去重临时消息
-              const upstreamUserContents = new Set(
-                convertedMessages
-                  .filter((m: TMessage) => m.role === 'user')
-                  .map((m: TMessage) => m.content)
-              )
+            // 先在 set 外部获取当前状态并计算合并结果
+            const currentMessages = get().messages
+            const tempMessagesCount = currentMessages.filter((m: TMessage) => m.id.startsWith('temp-')).length
 
-              // 过滤掉已被上游确认的临时消息（内容相同的 from_user 消息已在上游列表中）
-              const filteredExisting = state.messages.filter(
-                (m: TMessage) => !(m.id.startsWith('temp-') && upstreamUserContents.has(m.content))
-              )
+            // 上游 from_user 消息的内容集合，用于去重临时消息
+            const upstreamUserContents = new Set(
+              convertedMessages
+                .filter((m: TMessage) => m.role === 'user')
+                .map((m: TMessage) => m.content)
+            )
 
-              const existingIds = new Set(filteredExisting.map((m: TMessage) => m.id))
-              const newMessages = convertedMessages.filter((m) => !existingIds.has(m.id))
+            // 过滤掉已被上游确认的临时消息
+            const filteredExisting = currentMessages.filter(
+              (m: TMessage) => !(m.id.startsWith('temp-') && upstreamUserContents.has(m.content))
+            )
 
-              // 更新已存在消息的内容（用于流式更新）
-              const updatedMessages = filteredExisting.map((existing: TMessage) => {
-                const updated = convertedMessages.find((m: TMessage) => m.id === existing.id)
-                if (updated && updated.content !== existing.content) {
-                  return { ...existing, content: updated.content, status: updated.status }
-                }
-                return existing
+            const removedTempCount = currentMessages.length - filteredExisting.length
+            if (removedTempCount > 0 || tempMessagesCount > 0) {
+              console.log('[WebSocket] merging messages', {
+                tempMessagesCount,
+                removedTempCount,
+                upstreamUserContents: Array.from(upstreamUserContents).slice(0, 3),
+                existingCount: currentMessages.length,
+                incomingCount: convertedMessages.length,
               })
+            }
 
-              return {
-                messages: [...updatedMessages, ...newMessages],
+            // 使用 Map 来去重
+            const messageMap = new Map<string, TMessage>()
+
+            // 先添加已存在的消息
+            for (const msg of filteredExisting) {
+              messageMap.set(String(msg.id), msg)
+            }
+
+            // 再添加/更新新消息
+            for (const msg of convertedMessages) {
+              const msgId = String(msg.id)
+              const existing = messageMap.get(msgId)
+              if (existing) {
+                // 更新已存在的消息
+                messageMap.set(msgId, {
+                  ...existing,
+                  content: msg.content,
+                  status: msg.status,
+                  attachments: msg.attachments,
+                })
+              } else {
+                messageMap.set(msgId, msg)
               }
+            }
+
+            // 按时间排序得到最终合并消息
+            const mergedMessages = Array.from(messageMap.values()).sort(
+              (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            )
+
+            // 更新 UI
+            set({ messages: mergedMessages })
+
+            // 同步到 IndexedDB 缓存（使用相同的 mergedMessages，确保一致）
+            indexedDBCache.setMessages(sessionId, mergedMessages).catch((err) => {
+              console.error('[WebSocket] Failed to update cache:', err)
             })
+
+            // 更新会话标题（如果远端返回了标题）
+            if (data.state?.title) {
+              set((state: any) => {
+                const sessionIndex = state.sessions.findIndex((s: any) => s.id === sessionId)
+                if (sessionIndex >= 0 && state.sessions[sessionIndex].title !== data.state.title) {
+                  const updatedSessions = [...state.sessions]
+                  updatedSessions[sessionIndex] = {
+                    ...updatedSessions[sessionIndex],
+                    title: data.state.title,
+                  }
+                  return { sessions: updatedSessions }
+                }
+                return {}
+              })
+            }
 
             // 更新 todos
             if (data.state?.todos) {
@@ -244,10 +296,12 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     sendMessageWS: (sessionId: string, content: string, attachments: string[] = []) => {
       const ws = get().wsConnections[sessionId]
       if (ws && ws.readyState === WebSocket.OPEN) {
+        console.log('[sendMessageWS] sending input', { sessionId, contentLength: content.length, attachments: attachments.length > 0 ? attachments : 'none' })
         ws.sendInput(content, attachments)
 
         // 乐观更新：立即添加用户消息到列表
-        const tempId = `temp-${Date.now()}`
+        const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        console.log('[sendMessageWS] optimistic update', { tempId, contentLength: content.length })
         const userMsg: TMessage = {
           id: tempId,
           project_id: get().currentProject?.id || '',
@@ -299,10 +353,10 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     fetchMessagesBySession: async (
       projectId: string,
       sessionId: string,
-      options?: { mode?: 'replaceLatest' | 'prependOlder'; limit?: number }
+      options?: { mode?: 'replaceLatest' | 'prependOlder'; limit?: number; useCache?: boolean }
     ) => {
       const mode = options?.mode || 'replaceLatest'
-      // 切会话/刷新时优先一次拉取更多最近消息，避免"看起来没更新"。
+      const useCache = options?.useCache !== false // 默认启用缓存
       const pageSize = options?.limit || (mode === 'replaceLatest' ? 200 : 20)
       const isActiveSession = () => get().activeMessageSessionId === sessionId
       const pagination = get().messagePagination[sessionId] || {
@@ -328,30 +382,86 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       try {
         if (mode === 'replaceLatest') {
           set({ loading: true, error: null })
-          // 直接走服务端真源：切会话时先清空当前展示，避免旧会话残留。
-          if (isActiveSession()) {
-            set({ messages: [] })
+
+          // ==== 缓存优先加载策略 ====
+          if (useCache) {
+            // 1. 先尝试从 IndexedDB 读取缓存并立即显示（秒开体验）
+            const cachedMessages = await indexedDBCache.getMessagesBySession(sessionId)
+            if (cachedMessages.length > 0 && isActiveSession()) {
+              console.log('[fetchMessages] cache hit', { sessionId, count: cachedMessages.length })
+              set({ messages: cachedMessages, loading: true }) // 保持 loading 状态，等待 HTTP 更新
+            }
+
+            // 2. 调用后端代理接口获取上游历史消息
+            try {
+              const { messages: upstreamMessages } = await historySync.fetchHistory(
+                projectId,
+                sessionId,
+                { limit: 1000 }
+              )
+              console.log('[fetchMessages] upstream fetched', { sessionId, count: upstreamMessages.length })
+
+              // 3. 合并缓存、上游消息和当前内存中的 temp 消息
+              // 注意：用户可能在加载过程中发送了新消息（temp），需要保留
+              const currentMemoryMessages = get().messages
+              const tempMessages = currentMemoryMessages.filter((m: TMessage) => m.id.startsWith('temp-'))
+
+              let merged = historySync.mergeMessages(cachedMessages, upstreamMessages)
+
+              // 如果内存中有 temp 消息，追加到合并结果中（避免被覆盖）
+              if (tempMessages.length > 0) {
+                console.log('[fetchMessages] preserving temp messages during merge', {
+                  tempCount: tempMessages.length,
+                  tempIds: tempMessages.map((m: TMessage) => m.id),
+                })
+                merged = historySync.mergeMessages(merged, tempMessages)
+              }
+
+              // 4. 更新 IndexedDB 缓存（不包含 temp 消息）
+              const nonTempMessages = merged.filter((m: TMessage) => !m.id.startsWith('temp-'))
+              await indexedDBCache.setMessages(sessionId, nonTempMessages)
+
+              // 5. 更新 UI（如果会话仍活跃）
+              if (isActiveSession()) {
+                set({
+                  messages: merged,
+                  loading: false,
+                  messagePagination: {
+                    ...get().messagePagination,
+                    [sessionId]: {
+                      nextSkip: merged.length,
+                      hasMore: upstreamMessages.length === 1000,
+                      loadingOlder: false,
+                      pageSize,
+                    },
+                  },
+                })
+              }
+            } catch (err) {
+              // 上游获取失败，但缓存已有数据，保留缓存不报错
+              console.error('[fetchMessages] upstream failed, using cache', err)
+              if (cachedMessages.length > 0 && isActiveSession()) {
+                set({ loading: false })
+              } else {
+                // 没有缓存且上游失败，设置错误状态
+                set({ error: 'Failed to fetch messages', loading: false })
+              }
+            }
+            return
           }
-        } else {
+
+          // 旧逻辑作为 fallback（当缓存禁用或上游失败且无缓存时）
+          const skip = 0
+          const messages = (await projectApi.getSessionMessages(projectId, sessionId, {
+            skip,
+            limit: pageSize,
+          })) as TMessage[]
+          if (!isActiveSession()) {
+            return
+          }
+          // 仅当接口确有消息时才替换列表；接口为空时只结束 loading，保留当前内存中的消息。
           set((state: any) => ({
-            error: null,
-            messagePagination: {
-              ...state.messagePagination,
-              [sessionId]: { ...pagination, loadingOlder: true },
-            },
-          }))
-        }
-        const skip = mode === 'replaceLatest' ? 0 : pagination.nextSkip
-        const messages = (await projectApi.getSessionMessages(projectId, sessionId, {
-          skip,
-          limit: pageSize,
-        })) as TMessage[]
-        if (!isActiveSession()) {
-          return
-        }
-        if (mode === 'replaceLatest') {
-          set((state: any) => ({
-            messages,
+            ...(messages.length > 0 ? { messages } : {}),
             loading: false,
             messagePagination: {
               ...state.messagePagination,
@@ -363,26 +473,42 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
               },
             },
           }))
-          return
-        }
-        set((state: any) => {
-          const existingIds = new Set(state.messages.map((m: TMessage) => m.id))
-          const older = messages.filter((m) => !existingIds.has(m.id))
-          const merged = [...older, ...state.messages]
-          return {
-            messages: merged,
+        } else {
+          // prependOlder 模式：加载更多历史消息
+          set((state: any) => ({
+            error: null,
             messagePagination: {
               ...state.messagePagination,
-              [sessionId]: {
-                ...pagination,
-                nextSkip: pagination.nextSkip + messages.length,
-                hasMore: messages.length === pageSize,
-                loadingOlder: false,
-                pageSize,
-              },
+              [sessionId]: { ...pagination, loadingOlder: true },
             },
+          }))
+          const skip = pagination.nextSkip
+          const messages = (await projectApi.getSessionMessages(projectId, sessionId, {
+            skip,
+            limit: pageSize,
+          })) as TMessage[]
+          if (!isActiveSession()) {
+            return
           }
-        })
+          set((state: any) => {
+            const existingIds = new Set(state.messages.map((m: TMessage) => m.id))
+            const older = messages.filter((m) => !existingIds.has(m.id))
+            const merged = [...older, ...state.messages]
+            return {
+              messages: merged,
+              messagePagination: {
+                ...state.messagePagination,
+                [sessionId]: {
+                  ...pagination,
+                  nextSkip: pagination.nextSkip + messages.length,
+                  hasMore: messages.length === pageSize,
+                  loadingOlder: false,
+                  pageSize,
+                },
+              },
+            }
+          })
+        }
       } catch (error: any) {
         if (!isActiveSession()) {
           return

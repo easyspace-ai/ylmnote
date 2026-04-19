@@ -3,11 +3,12 @@
  */
 
 import { cn } from '@/utils'
-import { BookOpen, Settings2, Zap } from 'lucide-react'
+import { BookOpen, Settings2, Zap, Check } from 'lucide-react'
 import type { StudioAction } from './types'
 
 interface StudioActionsPopoverProps {
   tools: StudioAction[]
+  selectedToolId?: string | null
   onPick: (tool: StudioAction) => void
   onClose: () => void
   onExploreMore?: () => void
@@ -17,6 +18,7 @@ interface StudioActionsPopoverProps {
 
 export function StudioActionsPopover({
   tools,
+  selectedToolId,
   onPick,
   onClose,
   onExploreMore,
@@ -36,36 +38,42 @@ export function StudioActionsPopover({
       >
         <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 bg-gray-50/80">
           <Zap size={14} className="text-indigo-500 shrink-0" />
-          <span className="text-xs font-semibold text-gray-800">Studio 动作</span>
+          <span className="text-xs font-semibold text-gray-800">选择技能</span>
         </div>
         <div className="overflow-y-auto py-1">
           {tools.length > 0 ? (
-            tools.map((tool) => (
-              <button
-                key={tool.id}
-                type="button"
-                role="option"
-                onClick={() => {
-                  onPick(tool)
-                  onClose()
-                }}
-                className={cn(
-                  'flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-xs font-medium transition-colors',
-                  'hover:bg-gray-50'
-                )}
-              >
-                <span
+            tools.map((tool) => {
+              const isSelected = selectedToolId === tool.id
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => onPick(tool)}
                   className={cn(
-                    'truncate rounded-lg bg-gradient-to-br px-2.5 py-1 shadow-sm',
-                    tool.color,
-                    tool.textColor
+                    'flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-xs font-medium transition-colors',
+                    isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'
                   )}
                 >
-                  {tool.label}
-                </span>
-                <span className="shrink-0 text-[10px] text-gray-400">AI</span>
-              </button>
-            ))
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'truncate rounded-lg bg-gradient-to-br px-2.5 py-1 shadow-sm',
+                        tool.color,
+                        tool.textColor
+                      )}
+                    >
+                      {tool.label}
+                    </span>
+                    {isSelected && (
+                      <Check size={14} className="text-indigo-500" />
+                    )}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-gray-400">AI</span>
+                </button>
+              )
+            })
           ) : (
             <div className="px-4 py-6 text-center text-xs text-gray-400">
               暂无 Studio 动作，请在设置中配置提示词模板

@@ -26,6 +26,8 @@ interface AIChatBoxNewProps {
   libraryFiles?: { id: string; name: string }[]
   models?: ModelOption[]
   studioActions?: StudioAction[]
+  activeStudioToolId?: string | null
+  onStudioToolSelect?: (action: StudioAction | null) => void
   onRunStudioTool?: (action: StudioAction) => void | Promise<void>
 
   // 回调
@@ -84,6 +86,8 @@ export default function AIChatBoxNew({
   libraryFiles = [],
   models,
   studioActions = [],
+  activeStudioToolId,
+  onStudioToolSelect,
   onRunStudioTool,
   onSendMessage,
   onCopy,
@@ -149,6 +153,8 @@ export default function AIChatBoxNew({
       libraryFiles={libraryFiles}
       todoItems={todoItems}
       studioActions={studioActions}
+      activeStudioToolId={activeStudioToolId}
+      onStudioToolSelect={onStudioToolSelect}
       onRunStudioTool={onRunStudioTool}
       isStreaming={isStreaming}
       isLoadingMessages={isLoadingMessages}

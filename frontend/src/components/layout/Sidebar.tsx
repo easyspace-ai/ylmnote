@@ -1,7 +1,7 @@
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   Plus, Search, FolderOpen, Settings, LogOut,
-  Home, ChevronLeft, ChevronRight, Zap, Sparkles,
+  Home, ChevronLeft, ChevronRight, Zap,
 } from 'lucide-react'
 import { cn } from '@/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -9,6 +9,9 @@ import { useProjectsList } from '@/hooks/useProjectsList'
 import { useState } from 'react'
 import { create } from 'zustand'
 import GlobalSearch from '@/components/GlobalSearch'
+import { Modal } from '@/components/ui/Dialog'
+import { useAppStore } from '@/stores/apiStore'
+import { queryClient } from '@/lib/queryClient'
 
 export const useSidebarStore = create<{
   sidebarCollapsed: boolean
@@ -27,12 +30,36 @@ const navItems = [
 
 export default function Sidebar() {
   const location = useLocation()
+  const navigate = useNavigate()
   const { data: projects = [] } = useProjectsList()
   const { user, logout } = useAuthStore()
   const { sidebarCollapsed, setSidebarCollapsed } = useSidebarStore()
   const [userHovered, setUserHovered] = useState(false)
+  const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
+  const [newProjectForm, setNewProjectForm] = useState({ name: '', description: '' })
+  const [isCreating, setIsCreating] = useState(false)
+  const { createProject } = useAppStore()
 
   const toggle = () => setSidebarCollapsed(!sidebarCollapsed)
+
+  const handleCreateProject = async () => {
+    if (!newProjectForm.name.trim()) return
+    setIsCreating(true)
+    try {
+      const project = await createProject({
+        name: newProjectForm.name.trim(),
+        description: newProjectForm.description.trim(),
+      })
+      void queryClient.invalidateQueries({ queryKey: ['projects'] })
+      setIsNewProjectModalOpen(false)
+      setNewProjectForm({ name: '', description: '' })
+      navigate(`/boards/${project.id}`)
+    } catch (e) {
+      console.error('Failed to create project', e)
+    } finally {
+      setIsCreating(false)
+    }
+  }
 
   const isActive = (path: string) =>
     path === '/'
@@ -56,9 +83,11 @@ export default function Sidebar() {
         {sidebarCollapsed ? (
           <>
             <Link to="/" className="shrink-0">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-white" />
-              </div>
+              <img
+                src="/logo.jpg"
+                alt="MetaNote"
+                className="w-9 h-9 rounded-xl object-cover"
+              />
             </Link>
             {/* Expand button */}
             <button
@@ -93,8 +122,8 @@ export default function Sidebar() {
 
       {/* ── New Project ───────────────────────────────── */}
       <div className={cn('px-3 py-3', sidebarCollapsed && 'flex justify-center')}>
-        <Link
-          to="/boards/new"
+        <button
+          onClick={() => setIsNewProjectModalOpen(true)}
           className={cn(
             'flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-xl py-2.5 transition-colors duration-150',
             sidebarCollapsed ? 'w-10 h-10 p-0 rounded-xl' : 'w-full px-4'
@@ -102,8 +131,64 @@ export default function Sidebar() {
         >
           <Plus size={18} />
           {!sidebarCollapsed && <span className="text-sm">新建项目</span>}
-        </Link>
+        </button>
       </div>
+
+      {/* ── New Project Modal ───────────────────────────────── */}
+      <Modal
+        isOpen={isNewProjectModalOpen}
+        onClose={() => setIsNewProjectModalOpen(false)}
+        title="新建项目"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              项目名称 <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              autoFocus
+              value={newProjectForm.name}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, name: e.target.value })}
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
+              placeholder="例如：产品竞品分析、读书笔记..."
+              className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              描述 <span className="text-gray-400 font-normal">（可选）</span>
+            </label>
+            <textarea
+              value={newProjectForm.description}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, description: e.target.value })}
+              placeholder="这个项目是用来做什么的..."
+              rows={3}
+              className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl outline-none resize-none focus:bg-white focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all"
+            />
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setIsNewProjectModalOpen(false)}
+              className="flex-1 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleCreateProject}
+              disabled={isCreating || !newProjectForm.name.trim()}
+              className={cn(
+                'flex-1 py-2.5 text-sm font-medium text-white rounded-xl transition-colors',
+                'bg-primary-600 hover:bg-primary-700',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
+              )}
+            >
+              {isCreating ? '创建中...' : '创建项目'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* ── Global Search (expanded only) ────────────── */}
       {!sidebarCollapsed && (
