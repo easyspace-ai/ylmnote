@@ -59,6 +59,58 @@ type PendingOutgoingMessage = {
   createdAt: number
 }
 
+function mapHistoryMessagesToLocal(sessionId: string, projectId: string, messages: any[]): TMessage[] {
+  const seenStableIds = new Set<string>()
+  const converted: TMessage[] = []
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    if (!msg || msg.hidden) continue
+
+    const stableId = historySync.stableMessageId(
+      {
+        item_id: msg.item_id,
+        id: msg.id,
+        turn_number: msg.turn_number,
+        created_at: msg.created_at,
+      },
+      sessionId,
+      i
+    )
+    if (seenStableIds.has(stableId)) continue
+    seenStableIds.add(stableId)
+
+    const role: 'user' | 'assistant' | 'system' =
+      msg.kind === 'from_user'
+        ? 'user'
+        : (msg.kind === 'episodic_marker' || msg.kind === 'system')
+          ? 'system'
+          : 'assistant'
+
+    const content = Array.isArray(msg.message_parts)
+      ? msg.message_parts
+          .filter((part: any) => part.type === 'text')
+          .map((part: any) => part.content || '')
+          .join('')
+      : (msg.content || '')
+
+    converted.push({
+      id: stableId,
+      upstream_message_id: msg.item_id != null ? String(msg.item_id) : (msg.id != null ? String(msg.id) : stableId),
+      project_id: projectId,
+      session_id: sessionId,
+      role,
+      content,
+      status: 'idle',
+      attachments: {
+        upstream_kind: msg.kind,
+        message_kind: role === 'system' ? 'system' : 'normal',
+      },
+      created_at: msg.created_at ? new Date(msg.created_at).toISOString?.() || String(msg.created_at) : new Date().toISOString(),
+    } as TMessage)
+  }
+  return converted
+}
+
 /** set/get 使用宽松类型，避免与 zustand AppState 循环依赖 */
 export function createChatConversationSlice(set: (partial: any) => void, get: () => any) {
   return {
@@ -463,7 +515,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       })
 
       if (ws) {
-        void ws.ensureConnected(8000).then((ok) => {
+        void ws.ensureConnected(8000).then((ok: boolean) => {
           if (ok) void get().flushPendingOutgoingQueue(sessionId)
         })
       } else {
@@ -545,6 +597,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         limit?: number;
         __recoveryScheduled?: boolean;
         __retryAfterError?: boolean;
+        __historyFallbackTried?: boolean;
       }
     ) => {
       const mode = options?.mode || 'replaceLatest'
@@ -582,7 +635,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
           set({ loading: true, error: null })
 
           const skip = 0
-          const apiMessages = (await projectApi.getSessionMessages(projectId, sessionId, {
+          let apiMessages = (await projectApi.getSessionMessages(projectId, sessionId, {
             skip,
             limit: pageSize,
           })) as TMessage[]
@@ -600,6 +653,21 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
               }, 120)
             }
             return
+          }
+
+          if (apiMessages.length === 0 && !options?.__historyFallbackTried) {
+            try {
+              const historyResp = await projectApi.getSessionHistory(projectId, sessionId, {
+                offset: 0,
+                limit: pageSize,
+              })
+              const upstreamMessages = Array.isArray(historyResp?.messages) ? historyResp.messages : []
+              if (upstreamMessages.length > 0) {
+                apiMessages = mapHistoryMessagesToLocal(sessionId, projectId, upstreamMessages)
+              }
+            } catch (historyErr) {
+              console.warn(`[fetchMessagesBySession] history fallback failed for ${sessionId}:`, historyErr)
+            }
           }
 
           const currentMemoryMessages = get().messages
@@ -676,6 +744,35 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         if (mode === 'replaceLatest') {
           // 只在会话仍激活时更新错误状态（避免覆盖新会话的状态）
           if (stillActive) {
+            if (!options?.__historyFallbackTried) {
+              try {
+                const historyResp = await projectApi.getSessionHistory(projectId, sessionId, {
+                  offset: 0,
+                  limit: pageSize,
+                })
+                const upstreamMessages = Array.isArray(historyResp?.messages) ? historyResp.messages : []
+                if (upstreamMessages.length > 0) {
+                  const recovered = mapHistoryMessagesToLocal(sessionId, projectId, upstreamMessages)
+                  set({
+                    messages: recovered,
+                    loading: false,
+                    error: null,
+                    messagePagination: {
+                      ...get().messagePagination,
+                      [sessionId]: {
+                        nextSkip: recovered.length,
+                        hasMore: recovered.length === pageSize,
+                        loadingOlder: false,
+                        pageSize,
+                      },
+                    },
+                  })
+                  return
+                }
+              } catch (historyErr) {
+                console.warn(`[fetchMessagesBySession] history fallback after error failed for ${sessionId}:`, historyErr)
+              }
+            }
             set({
               error: error?.message || '加载消息失败，请稍后重试',
               loading: false,
