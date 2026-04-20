@@ -6,19 +6,11 @@
   <component name="ChangeListManager">
     <list default="true" id="c4873d76-20a5-4a5c-a543-f4ffe3969e6b" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/project_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/project_handler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/router.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/router.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/interfaces/http/ws_handler.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/interfaces/http/ws_handler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/doc/bak/tsconfig.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/layout/Sidebar.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/layout/Sidebar.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/main.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/pages/Auth/Login.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/Auth/Login.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/pages/Auth/Register.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/Auth/Register.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/pages/HomePage.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/HomePage.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/pages/NewProject.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/NewProject.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/gateway/provider/provider.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/ai/gateway/provider/provider.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/ChatInput.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/ChatInput.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/pages/ProjectList.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/ProjectList.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/stores/api/sessionMessageCache.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/api/sessionMessageCache.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/services/ws.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/services/ws.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

@@ -113,7 +113,7 @@ func (p *Provider) SendStop(ctx context.Context, sessionID string) error {
 		return err
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(p.cfg.WSWriteTimeout))
-	if err := conn.WriteJSON(map[string]any{"type": "Stop"}); err != nil {
+	if err := conn.WriteJSON(map[string]any{"type": "stop"}); err != nil {
 		return mapTransportErr("ws stop write failed", err)
 	}
 	return nil

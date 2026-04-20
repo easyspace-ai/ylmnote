@@ -59,6 +59,16 @@ interface AIChatBoxNewProps {
   stoppingUpstream?: boolean
   onUpstreamStop?: () => void | Promise<void>
 
+  // WebSocket 连接状态
+  wsConnectionStatus?: 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'failed'
+  wsReconnectAttempt?: number
+  wsReconnectMaxAttempts?: number
+  onRetryConnection?: () => void
+
+  // 错误状态
+  error?: string | null
+  onRetryLoadMessages?: () => void
+
   // 默认值
   defaultInputValue?: string
   /** 父组件注入输入框内容（如 Studio 技能提示词），以 seq 变化为准 */
@@ -105,6 +115,14 @@ export default function AIChatBoxNew({
   upstreamBanner = null,
   stoppingUpstream = false,
   onUpstreamStop,
+  // WebSocket 连接状态
+  wsConnectionStatus,
+  wsReconnectAttempt = 0,
+  wsReconnectMaxAttempts = 5,
+  onRetryConnection,
+  // 错误状态
+  error,
+  onRetryLoadMessages,
   defaultInputValue = '',
   inputPrefill,
   defaultMode = 'chat',
@@ -175,6 +193,14 @@ export default function AIChatBoxNew({
       upstreamBanner={upstreamBanner}
       stoppingUpstream={stoppingUpstream}
       onUpstreamStop={onUpstreamStop}
+      // WebSocket 连接状态
+      wsConnectionStatus={wsConnectionStatus}
+      wsReconnectAttempt={wsReconnectAttempt}
+      wsReconnectMaxAttempts={wsReconnectMaxAttempts}
+      onRetryConnection={onRetryConnection}
+      // 错误状态
+      error={error}
+      onRetryLoadMessages={onRetryLoadMessages}
       inputPrefill={inputPrefill}
       onTodoToggle={(id, done) => {
         // 处理待办事项切换

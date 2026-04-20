@@ -488,7 +488,7 @@ export default function ProjectDetail() {
     createSession,
     updateSession,
     deleteSession,
-    messages, 
+    messages,
     liveTodosBySession,
     messagePagination,
     installedSkills,
@@ -497,8 +497,6 @@ export default function ProjectDetail() {
     fetchMessages,
     fetchInstalledSkills,
     sendMessageWS,
-    connectWebSocket,
-    disconnectWebSocket,
     abortActiveMessageStream,
     resources,
     fetchResources,
@@ -511,6 +509,23 @@ export default function ProjectDetail() {
     createProject,
     uploadResource
   } = useAppStore()
+
+  // WebSocket actions 使用单独选择器订阅，避免每次渲染都获得新引用导致 useEffect 重复执行
+  const connectWebSocket = useAppStore((state) => state.connectWebSocket)
+  const disconnectWebSocket = useAppStore((state) => state.disconnectWebSocket)
+  const retryWebSocketConnection = useAppStore((state) => state.retryWebSocketConnection)
+
+  // WebSocket 连接状态
+  const wsStatus = useAppStore((state) =>
+    urlSessionId ? state.wsStatus?.[urlSessionId] : undefined
+  )
+  const wsReconnectAttempt = useAppStore((state) =>
+    urlSessionId ? state.wsReconnectAttempt?.[urlSessionId] : undefined
+  )
+  const wsReconnectMaxAttempts = useAppStore((state) =>
+    urlSessionId ? state.wsReconnectMaxAttempts?.[urlSessionId] : undefined
+  )
+
   const promptTemplates = useAppStore((state) => state.promptTemplates)
   const fetchPromptTemplates = useAppStore((state) => state.fetchPromptTemplates)
   const isStreaming = useAppStore((state) =>
@@ -519,7 +534,8 @@ export default function ProjectDetail() {
   const isLoadingMessages = useAppStore((state) =>
     Boolean(urlSessionId && state.messagesLoadingBySession?.[urlSessionId])
   )
-  
+  const error = useAppStore((state) => state.error)
+
   const [activeMainTab, setActiveMainTab] = useState<MainTabType>('chat')
   const [viewingResource, setViewingResource] = useState<{id: string, name: string, type?: string, content?: string, url?: string | null} | null>(null)
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false)
@@ -582,6 +598,8 @@ export default function ProjectDetail() {
   };
 
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadingFileName, setUploadingFileName] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<'uploading' | 'parsing' | 'completed' | null>(null)
   const { setSidebarCollapsed } = useSidebarStore()
   const { addToast } = useToast()
   
@@ -635,9 +653,17 @@ export default function ProjectDetail() {
       // 切换路由时先清空，避免短暂显示上一会话；拉取失败时 fetchMessagesBySession 不再二次清空，故不会「闪一下又空」。
       clearSessionMessages()
       void (async () => {
+        // 1. 先加载会话列表
         await fetchSessions(id)
-        await fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
-        // 建立 WebSocket 连接（对话真源在上游；本地库不再缓存消息，故不做延迟二次 HTTP 拉取以免用空列表覆盖 WS 内容）
+        // 2. 加载历史消息（关键：即使失败也要继续连接 WebSocket）
+        try {
+          await fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
+        } catch (err) {
+          console.error('[ProjectDetail] Failed to fetch messages:', err)
+          // 错误已在 store 中设置，会在 UI 中显示
+        }
+        // 3. 建立 WebSocket 连接（独立进行，不影响消息显示）
+        // WebSocket 连接在消息加载之后，确保实时消息不会与历史消息冲突
         connectWebSocket(urlSessionId, id)
       })()
     } else if (urlSessionId) {
@@ -645,7 +671,7 @@ export default function ProjectDetail() {
     } else {
       clearSessionMessages()
     }
-    
+
     // 清理函数：切换会话时断开旧连接
     return () => {
       if (urlSessionId) {
@@ -1077,13 +1103,26 @@ export default function ProjectDetail() {
 
     try {
       setIsUploading(true)
-      addToast('info', '文档上传与解析中，请稍候...', 5000)
+      setUploadingFileName(file.name)
+      setUploadProgress('uploading')
+
       await uploadResource(id, file)
+
+      // 上传完成，进入解析状态
+      setUploadProgress('parsing')
       await fetchResources(id)
-      addToast('success', '文档已成功解析入库')
+
+      // 显示完成状态后淡出
+      setUploadProgress('completed')
+      setTimeout(() => {
+        setUploadingFileName(null)
+        setUploadProgress(null)
+      }, 1500)
     } catch (err: any) {
       console.error(err)
       addToast('error', err.message || '上传失败，请重试')
+      setUploadingFileName(null)
+      setUploadProgress(null)
     } finally {
       setIsUploading(false)
       e.target.value = ''
@@ -1217,6 +1256,42 @@ export default function ProjectDetail() {
                             </div>
                           ) : (
                             <>
+                              {/* 正在上传的文件卡片 */}
+                              {uploadingFileName && uploadProgress && (
+                                <div className="group flex items-center gap-3 p-2.5 bg-gradient-to-r from-blue-50/80 to-indigo-50/50 border border-blue-100 rounded-lg animate-pulse">
+                                  <div className="p-1.5 bg-blue-100 rounded-md flex-shrink-0">
+                                    <FileText size={14} className="text-blue-500" />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium text-blue-700 truncate">{uploadingFileName}</p>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                      {uploadProgress === 'uploading' && (
+                                        <>
+                                          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" />
+                                          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:100ms]" />
+                                          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:200ms]" />
+                                          <span className="text-[10px] text-blue-500 ml-0.5">上传中</span>
+                                        </>
+                                      )}
+                                      {uploadProgress === 'parsing' && (
+                                        <>
+                                          <span className="w-3 h-3 border-2 border-blue-300 border-t-blue-500 rounded-full animate-spin" />
+                                          <span className="text-[10px] text-blue-500">解析中</span>
+                                        </>
+                                      )}
+                                      {uploadProgress === 'completed' && (
+                                        <>
+                                          <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                          </svg>
+                                          <span className="text-[10px] text-emerald-600">已完成</span>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
                               {docResources.length > 0 ? docResources.map((doc) => (
                                 <div
                                   key={doc.id}
@@ -1233,10 +1308,12 @@ export default function ProjectDetail() {
                                   <MoreMenu onRename={() => handleRename('document', doc.id)} onDelete={() => handleDelete('document', doc.id)} />
                                 </div>
                               )) : (
-                                <div className="text-center py-8">
-                                  <FileText size={28} className="text-gray-200 mx-auto mb-2" />
-                                  <p className="text-xs text-gray-400">暂无文档</p>
-                                </div>
+                                !uploadingFileName && (
+                                  <div className="text-center py-8">
+                                    <FileText size={28} className="text-gray-200 mx-auto mb-2" />
+                                    <p className="text-xs text-gray-400">暂无文档</p>
+                                  </div>
+                                )
                               )}
                               <button
                                 onClick={() => document.getElementById('file-upload')?.click()}
@@ -1245,8 +1322,8 @@ export default function ProjectDetail() {
                               >
                                 {isUploading ? (
                                   <span className="flex items-center gap-1.5">
-                                    <span className="w-3 h-3 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" />
-                                    <span>上传中...</span>
+                                    <Upload size={13} className="animate-bounce" />
+                                    <span>选择文件...</span>
                                   </span>
                                 ) : (
                                   <>
@@ -1462,7 +1539,7 @@ export default function ProjectDetail() {
               activeStudioToolId={activeStudioTool}
               onStudioToolSelect={(tool) => handleSelectStudioTool(tool as typeof studioTools[number] | null)}
               libraryFiles={libraryFiles}
-              upstreamInputLocked={uploading}
+              upstreamInputLocked={uploading || isStreaming}
               upstreamCanStop={Boolean(urlSessionId && isStreaming)}
               upstreamBanner={uploading ? '正在上传附件，请稍候…' : null}
               stoppingUpstream={stoppingUpstream}
@@ -1496,6 +1573,14 @@ export default function ProjectDetail() {
                 if (!id || !urlSessionId) return
                 await loadOlderMessages(id, urlSessionId)
               }}
+              // WebSocket 连接状态
+              wsConnectionStatus={wsStatus}
+              wsReconnectAttempt={wsReconnectAttempt}
+              wsReconnectMaxAttempts={wsReconnectMaxAttempts}
+              onRetryConnection={urlSessionId ? () => retryWebSocketConnection(urlSessionId) : undefined}
+              // 错误状态
+              error={error}
+              onRetryLoadMessages={urlSessionId && id ? () => fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' }) : undefined}
             />
             )}
           </div>

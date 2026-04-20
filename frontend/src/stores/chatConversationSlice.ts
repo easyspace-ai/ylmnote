@@ -49,8 +49,8 @@ interface WSStatusData {
 
 type WSData = WSUpdateData | WSStatusData
 
-/** WebSocket 连接状态 */
-type WSConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
+/** WebSocket 连接状态 - 新增 'failed' 表示达到最大重试次数后失败 */
+type WSConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'failed'
 
 /** set/get 使用宽松类型，避免与 zustand AppState 循环依赖 */
 export function createChatConversationSlice(set: (partial: any) => void, get: () => any) {
@@ -58,16 +58,21 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     // WebSocket 连接状态
     wsConnections: {} as Record<string, SessionWebSocket>,
     wsStatus: {} as Record<string, WSConnectionStatus>,
+    wsReconnectAttempt: {} as Record<string, number>,     // 当前重试次数
+    wsReconnectMaxAttempts: {} as Record<string, number>, // 最大重试次数（用于显示）
     messagesLoadingBySession: {} as Record<string, boolean>,
 
     // 连接 WebSocket
     connectWebSocket: (sessionId: string, projectId?: string) => {
       const state = get()
-      
+
       // 如果已有连接，先关闭
       if (state.wsConnections[sessionId]) {
         state.wsConnections[sessionId].close()
       }
+
+      // 获取最大重试次数配置
+      const MAX_RECONNECT_ATTEMPTS = 5;
 
       const ws = new SessionWebSocket(sessionId, projectId || state.currentProject?.id || '', {
         onMessage: (data: WSData) => {
@@ -293,16 +298,33 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
             wsStatus: { ...state.wsStatus, [sessionId]: status },
           }))
         },
-        onError: (error: Error) => {
-          console.error('WebSocket error:', error)
+        onError: (error: Error, isFatal?: boolean) => {
+          console.error('WebSocket error:', error, isFatal ? '(fatal)' : '')
           set((state: any) => ({
             error: error.message,
-            wsStatus: { ...state.wsStatus, [sessionId]: 'disconnected' },
+            wsStatus: { ...state.wsStatus, [sessionId]: isFatal ? 'failed' : 'disconnected' },
           }))
         },
         onClose: () => {
           // 连接关闭处理 - ws.ts 会自动重连，这里不需要额外处理
           console.log('WebSocket closed for session:', sessionId)
+        },
+        onReconnectAttempt: (attempt: number, maxAttempts: number) => {
+          // 通知重试进度
+          console.log(`WebSocket reconnect attempt ${attempt}/${maxAttempts} for session:`, sessionId)
+          set((state: any) => ({
+            wsReconnectAttempt: { ...state.wsReconnectAttempt, [sessionId]: attempt },
+            wsReconnectMaxAttempts: { ...state.wsReconnectMaxAttempts, [sessionId]: maxAttempts },
+            wsStatus: { ...state.wsStatus, [sessionId]: 'reconnecting' },
+          }))
+        },
+        onReconnectFailed: () => {
+          // 达到最大重试次数后回调
+          console.warn(`WebSocket max reconnect attempts reached for session:`, sessionId)
+          set((state: any) => ({
+            wsStatus: { ...state.wsStatus, [sessionId]: 'failed' },
+            error: '连接失败，请检查网络后点击重试',
+          }))
         },
       })
 
@@ -310,7 +332,29 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       set((state: any) => ({
         wsConnections: { ...state.wsConnections, [sessionId]: ws },
         wsStatus: { ...state.wsStatus, [sessionId]: 'connecting' },
+        wsReconnectAttempt: { ...state.wsReconnectAttempt, [sessionId]: 0 },
+        wsReconnectMaxAttempts: { ...state.wsReconnectMaxAttempts, [sessionId]: MAX_RECONNECT_ATTEMPTS },
       }))
+    },
+
+    // 手动触发 WebSocket 重连
+    retryWebSocketConnection: (sessionId: string) => {
+      const state = get()
+      const ws = state.wsConnections[sessionId]
+      if (ws) {
+        console.log(`[store] Manual retry for session ${sessionId}`)
+        ws.retry()
+        // 重置状态
+        set((state: any) => ({
+          wsStatus: { ...state.wsStatus, [sessionId]: 'connecting' },
+          wsReconnectAttempt: { ...state.wsReconnectAttempt, [sessionId]: 0 },
+          error: null,
+        }))
+      } else {
+        // 如果没有现有连接，创建新连接
+        console.log(`[store] No existing connection for ${sessionId}, creating new one`)
+        get().connectWebSocket(sessionId, state.currentProject?.id)
+      }
     },
 
     // 断开 WebSocket
@@ -318,15 +362,21 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
       const state = get()
       const ws = state.wsConnections[sessionId]
       if (ws) {
-        ws.close()
+        ws.destroy()
         set((state: any) => {
           const newConnections = { ...state.wsConnections }
           delete newConnections[sessionId]
           const newStatus = { ...state.wsStatus }
           delete newStatus[sessionId]
+          const newAttempts = { ...state.wsReconnectAttempt }
+          delete newAttempts[sessionId]
+          const newMaxAttempts = { ...state.wsReconnectMaxAttempts }
+          delete newMaxAttempts[sessionId]
           return {
             wsConnections: newConnections,
             wsStatus: newStatus,
+            wsReconnectAttempt: newAttempts,
+            wsReconnectMaxAttempts: newMaxAttempts,
           }
         })
       }
@@ -365,13 +415,17 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     abortActiveMessageStream: (sessionId?: string) => {
       if (sessionId) {
         const ws = get().wsConnections[sessionId]
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.sendStop()
+        const readyState = ws?.readyState
+        console.log(`[abortActiveMessageStream] sessionId=${sessionId}, readyState=${readyState} (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)`)
+        if (ws && readyState === WebSocket.OPEN) {
+          const sent = ws.sendStop()
+          console.log(`[abortActiveMessageStream] Stop frame sent: ${sent}`)
           window.setTimeout(() => {
             if (get().wsConnections[sessionId] !== ws) return
             get().disconnectWebSocket(sessionId)
           }, STOP_THEN_DISCONNECT_MS)
         } else {
+          console.warn(`[abortActiveMessageStream] WebSocket not open, disconnecting directly`)
           get().disconnectWebSocket(sessionId)
         }
         set((state: any) => ({
@@ -382,8 +436,14 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         }))
       } else {
         const snap = { ...get().wsConnections } as Record<string, InstanceType<typeof SessionWebSocket>>
+        console.log(`[abortActiveMessageStream] Stopping all sessions, count=${Object.keys(snap).length}`)
         Object.values(snap).forEach((w) => {
-          if (w?.readyState === WebSocket.OPEN) w.sendStop()
+          const state = w?.readyState
+          console.log(`[abortActiveMessageStream] Session readyState=${state}`)
+          if (state === WebSocket.OPEN) {
+            const sent = w.sendStop()
+            console.log(`[abortActiveMessageStream] Stop frame sent: ${sent}`)
+          }
         })
         window.setTimeout(() => {
           Object.keys(get().wsConnections).forEach(sid => get().disconnectWebSocket(sid))
@@ -508,14 +568,20 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
           })
         }
       } catch (error: any) {
-        if (!isActiveSession()) {
-          return
-        }
+        // 即使会话不再是激活状态，也要记录错误并清理加载状态
+        console.error(`[fetchMessagesBySession] Failed for ${sessionId}:`, error)
+        const stillActive = isActiveSession()
         if (mode === 'replaceLatest') {
-          set({ error: error.message, loading: false })
+          // 只在会话仍激活时更新错误状态（避免覆盖新会话的状态）
+          if (stillActive) {
+            set({
+              error: error?.message || '加载消息失败，请稍后重试',
+              loading: false,
+            })
+          }
         } else {
           set((state: any) => ({
-            error: error.message,
+            error: stillActive ? (error?.message || '加载消息失败') : state.error,
             messagePagination: {
               ...state.messagePagination,
               [sessionId]: {

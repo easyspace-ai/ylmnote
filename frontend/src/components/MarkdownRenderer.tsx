@@ -70,6 +70,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { co
             )
           },
           p({ children, ...props }) {
+            // 检查是否包含块级元素（如代码块），如果有则使用 div 避免 DOM 嵌套错误
+            const hasBlockElement = Array.isArray(children) && children.some(
+              (child: any) => child?.type === 'div' || child?.props?.className?.includes('not-prose')
+            )
+            if (hasBlockElement) {
+              return <div {...props} className="mb-4">{children}</div>
+            }
             return <p {...props}>{children}</p>
           }
         }}

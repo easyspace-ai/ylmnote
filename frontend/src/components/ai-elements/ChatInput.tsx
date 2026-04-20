@@ -41,9 +41,10 @@ export function ChatInput({
   autoFocus = false,
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const composeLocked = disabled || isStreaming || upstreamLocked
+  // 输入锁定：仅当明确 disabled 时锁定；上游思考或流式时都可以输入
+  const composeLocked = disabled
   /** 本地流式中，或远端 busy 且门控允许 Stop（刷新后进会话场景） */
-  const showStopButton = Boolean(onStop) && (isStreaming || canStop)
+  const showStopButton = Boolean(onStop) && (isStreaming || canStop || upstreamLocked)
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -102,13 +103,13 @@ export function ChatInput({
           onClick={() => void onStop?.()}
           disabled={stoppingUpstream}
           className={cn(
-            'm-2 flex size-8 shrink-0 items-center justify-center rounded-full transition-all duration-200',
+            'm-2 flex size-8 shrink-0 items-center justify-center rounded-lg transition-all duration-200',
             stoppingUpstream
-              ? 'cursor-wait bg-rose-100 text-rose-300 dark:bg-rose-300/20'
-              : 'bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-white/90'
+              ? 'cursor-wait bg-red-100 text-red-300 dark:bg-red-400/20 dark:text-red-300/50'
+              : 'bg-red-500 text-white hover:bg-red-600 shadow-sm hover:shadow-md dark:bg-red-500 dark:hover:bg-red-400'
           )}
         >
-          <Square size={10} fill="currentColor" className={cn(stoppingUpstream ? 'text-rose-400' : 'text-current')} />
+          <Square size={12} fill="currentColor" className={cn(stoppingUpstream ? 'text-red-400' : 'text-white')} />
         </button>
       ) : (
         <button
