@@ -6,12 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="c4873d76-20a5-4a5c-a543-f4ffe3969e6b" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/internal/infrastructure/ai/gateway/provider/provider.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/internal/infrastructure/ai/gateway/provider/provider.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/AIChat.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/ai-elements/ChatInput.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ai-elements/ChatInput.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/ProjectDetail.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/services/ws.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/services/ws.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/stores/chatConversationSlice.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

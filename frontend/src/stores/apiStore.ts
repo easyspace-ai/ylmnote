@@ -15,7 +15,7 @@ import { createChatConversationSlice } from '@/stores/chatConversationSlice'
 export type { SessionSyncMeta } from '@/stores/apiStoreTypes'
 
 /** WebSocket 连接状态 */
-type WSConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
+type WSConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'failed'
 
 // Store 状态
 interface AppState {
@@ -40,6 +40,9 @@ interface AppState {
   // WebSocket
   wsConnections: Record<string, SessionWebSocket>
   wsStatus: Record<string, WSConnectionStatus>
+  wsReconnectAttempt: Record<string, number>
+  wsReconnectMaxAttempts: Record<string, number>
+  pendingOutgoingQueue: Record<string, Array<{ id: string; content: string; attachments: string[]; createdAt: number }>>
 
   // 技能
   skills: TSkill[]
@@ -98,6 +101,10 @@ interface AppState {
   connectWebSocket: (sessionId: string, projectId?: string) => void
   /** 断开 WebSocket 连接 */
   disconnectWebSocket: (sessionId: string) => void
+  /** 手动重试 WebSocket 连接 */
+  retryWebSocketConnection: (sessionId: string) => void
+  /** 刷新并发送排队中的消息 */
+  flushPendingOutgoingQueue: (sessionId: string) => Promise<void>
   /** 中止流式读取：不传则中止全部；传 sessionId 则仅中止该会话 */
   abortActiveMessageStream: (sessionId?: string) => void
   /** @deprecated W6 功能已移除 */

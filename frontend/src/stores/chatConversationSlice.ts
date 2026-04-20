@@ -52,6 +52,13 @@ type WSData = WSUpdateData | WSStatusData
 /** WebSocket 连接状态 - 新增 'failed' 表示达到最大重试次数后失败 */
 type WSConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'failed'
 
+type PendingOutgoingMessage = {
+  id: string
+  content: string
+  attachments: string[]
+  createdAt: number
+}
+
 /** set/get 使用宽松类型，避免与 zustand AppState 循环依赖 */
 export function createChatConversationSlice(set: (partial: any) => void, get: () => any) {
   return {
@@ -61,6 +68,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     wsReconnectAttempt: {} as Record<string, number>,     // 当前重试次数
     wsReconnectMaxAttempts: {} as Record<string, number>, // 最大重试次数（用于显示）
     messagesLoadingBySession: {} as Record<string, boolean>,
+    pendingOutgoingQueue: {} as Record<string, PendingOutgoingMessage[]>,
 
     // 连接 WebSocket
     connectWebSocket: (sessionId: string, projectId?: string) => {
@@ -296,13 +304,28 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
         onStatusChange: (status: string) => {
           set((state: any) => ({
             wsStatus: { ...state.wsStatus, [sessionId]: status },
+            error: status === 'connected' || status === 'reconnecting' ? null : state.error,
           }))
+          if (status === 'connected') {
+            void get().flushPendingOutgoingQueue(sessionId)
+          }
         },
         onError: (error: Error, isFatal?: boolean) => {
           console.error('WebSocket error:', error, isFatal ? '(fatal)' : '')
           set((state: any) => ({
-            error: error.message,
-            wsStatus: { ...state.wsStatus, [sessionId]: isFatal ? 'failed' : 'disconnected' },
+            error:
+              isFatal || state.wsStatus?.[sessionId] === 'disconnected'
+                ? error.message
+                : state.error,
+            wsStatus: {
+              ...state.wsStatus,
+              [sessionId]:
+                isFatal
+                  ? 'failed'
+                  : (state.wsStatus?.[sessionId] === 'reconnecting' || state.wsStatus?.[sessionId] === 'connecting')
+                    ? state.wsStatus?.[sessionId]
+                    : 'disconnected',
+            },
           }))
         },
         onClose: () => {
@@ -316,6 +339,7 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
             wsReconnectAttempt: { ...state.wsReconnectAttempt, [sessionId]: attempt },
             wsReconnectMaxAttempts: { ...state.wsReconnectMaxAttempts, [sessionId]: maxAttempts },
             wsStatus: { ...state.wsStatus, [sessionId]: 'reconnecting' },
+            error: null,
           }))
         },
         onReconnectFailed: () => {
@@ -385,30 +409,91 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     // 发送消息（通过 WebSocket）
     sendMessageWS: (sessionId: string, content: string, attachments: string[] = []) => {
       const ws = get().wsConnections[sessionId]
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      console.log('[sendMessageWS] optimistic update', { tempId, contentLength: content.length })
+      const userMsg: TMessage = {
+        id: tempId,
+        project_id: get().currentProject?.id || '',
+        session_id: sessionId,
+        role: 'user',
+        content,
+        resource_refs: attachments.length > 0 ? attachments.map(id => ({ id })) : undefined,
+        attachments: { temp: true },
+        created_at: new Date().toISOString(),
+      }
+
+      set((state: any) => ({
+        messages: [...state.messages, userMsg],
+      }))
+
       if (ws && ws.readyState === WebSocket.OPEN) {
         console.log('[sendMessageWS] sending input', { sessionId, contentLength: content.length, attachments: attachments.length > 0 ? attachments : 'none' })
         ws.sendInput(content, attachments)
-
-        // 乐观更新：立即添加用户消息到列表
-        const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        console.log('[sendMessageWS] optimistic update', { tempId, contentLength: content.length })
-        const userMsg: TMessage = {
-          id: tempId,
-          project_id: get().currentProject?.id || '',
-          session_id: sessionId,
-          role: 'user',
-          content,
-          resource_refs: attachments.length > 0 ? attachments.map(id => ({ id })) : undefined,
-          attachments: { temp: true },
-          created_at: new Date().toISOString(),
-        }
-
-        set((state: any) => ({
-          messages: [...state.messages, userMsg],
-        }))
-      } else {
-        set({ error: 'WebSocket 未连接，请稍后重试' })
+        return
       }
+
+      // 未连接：先入队，再主动触发连接，用户无感
+      const now = Date.now()
+      const dedupeSignature = `${content}::${attachments.join(',')}`
+      set((state: any) => {
+        const queue = (state.pendingOutgoingQueue?.[sessionId] || []) as PendingOutgoingMessage[]
+        const hasRecentDuplicate = queue.some(
+          (item) => item.content === content && item.attachments.join(',') === attachments.join(',') && now - item.createdAt < 1200
+        )
+        if (hasRecentDuplicate) {
+          return {
+            error: '正在重连，消息已排队发送',
+            wsStatus: { ...state.wsStatus, [sessionId]: state.wsStatus?.[sessionId] || 'reconnecting' },
+          }
+        }
+        const nextItem: PendingOutgoingMessage = {
+          id: `${tempId}-${dedupeSignature.length}`,
+          content,
+          attachments,
+          createdAt: now,
+        }
+        return {
+          pendingOutgoingQueue: {
+            ...state.pendingOutgoingQueue,
+            [sessionId]: [...queue, nextItem],
+          },
+          error: '正在重连，消息已排队发送',
+          wsStatus: { ...state.wsStatus, [sessionId]: state.wsStatus?.[sessionId] || 'reconnecting' },
+        }
+      })
+
+      if (ws) {
+        void ws.ensureConnected(8000).then((ok) => {
+          if (ok) void get().flushPendingOutgoingQueue(sessionId)
+        })
+      } else {
+        get().connectWebSocket(sessionId, get().currentProject?.id)
+      }
+    },
+
+    flushPendingOutgoingQueue: async (sessionId: string) => {
+      const state = get()
+      const ws = state.wsConnections?.[sessionId]
+      const queue = (state.pendingOutgoingQueue?.[sessionId] || []) as PendingOutgoingMessage[]
+      if (!ws || queue.length === 0) return
+
+      const connected = await ws.ensureConnected(8000)
+      if (!connected || ws.readyState !== WebSocket.OPEN) {
+        return
+      }
+
+      const pending = [...queue]
+      pending.forEach((item) => {
+        ws.sendInput(item.content, item.attachments)
+      })
+
+      set((s: any) => ({
+        pendingOutgoingQueue: {
+          ...s.pendingOutgoingQueue,
+          [sessionId]: [],
+        },
+        error: s.error === '正在重连，消息已排队发送' ? null : s.error,
+      }))
     },
 
     // 中止当前会话的消息流：先发 Stop（与上游协议一致），再延迟断开，避免 Stop 未送达
@@ -455,7 +540,12 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
     fetchMessagesBySession: async (
       projectId: string,
       sessionId: string,
-      options?: { mode?: 'replaceLatest' | 'prependOlder'; limit?: number }
+      options?: {
+        mode?: 'replaceLatest' | 'prependOlder';
+        limit?: number;
+        __recoveryScheduled?: boolean;
+        __retryAfterError?: boolean;
+      }
     ) => {
       const mode = options?.mode || 'replaceLatest'
       /** 后端 ListBySessionID：skip=0 取最近一页，skip 递增取更早；每页默认 20 */
@@ -497,6 +587,18 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
             limit: pageSize,
           })) as TMessage[]
           if (!isActiveSession()) {
+            if (!options?.__recoveryScheduled) {
+              // 路由/状态切换的竞态窗口：短延迟复核后为当前会话再补拉一次
+              window.setTimeout(() => {
+                if (get().activeMessageSessionId !== sessionId) return
+                void get().fetchMessagesBySession(projectId, sessionId, {
+                  mode,
+                  limit: pageSize,
+                  __recoveryScheduled: true,
+                  __retryAfterError: options?.__retryAfterError,
+                })
+              }, 120)
+            }
             return
           }
 
@@ -578,6 +680,17 @@ export function createChatConversationSlice(set: (partial: any) => void, get: ()
               error: error?.message || '加载消息失败，请稍后重试',
               loading: false,
             })
+            if (!options?.__retryAfterError) {
+              window.setTimeout(() => {
+                if (get().activeMessageSessionId !== sessionId) return
+                void get().fetchMessagesBySession(projectId, sessionId, {
+                  mode,
+                  limit: pageSize,
+                  __recoveryScheduled: options?.__recoveryScheduled,
+                  __retryAfterError: true,
+                })
+              }, 400)
+            }
           }
         } else {
           set((state: any) => ({

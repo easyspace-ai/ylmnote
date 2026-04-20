@@ -152,6 +152,13 @@ export const projectApi = {
     const queryString = query.toString()
     return request<any[]>(`${API_ENDPOINTS.projectSessionMessages(projectId, sessionId)}${queryString ? `?${queryString}` : ''}`)
   },
+  getSessionHistory: (projectId: string, sessionId: string, params?: { offset?: number; limit?: number }) => {
+    const query = new URLSearchParams()
+    if (typeof params?.offset === 'number') query.set('offset', String(params.offset))
+    if (typeof params?.limit === 'number') query.set('limit', String(params.limit))
+    const queryString = query.toString()
+    return request<any>(`${API_ENDPOINTS.projectSession(projectId, sessionId)}/history${queryString ? `?${queryString}` : ''}`)
+  },
 
   // 获取消息列表（按项目，兼容）
   getMessages: (projectId: string) =>

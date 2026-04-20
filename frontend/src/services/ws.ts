@@ -19,6 +19,7 @@ const RECONFIG = {
   baseDelay: 1000,          // 基础延迟 1 秒
   maxDelay: 30000,          // 最大延迟 30 秒
   multiplier: 2,            // 指数倍数
+  failedRetryDelay: 5000,   // 达到最大重试次数后的下一轮自动重试间隔
 };
 
 /** 计算指数退避延迟 */
@@ -36,6 +37,11 @@ interface WSCallbacks {
   onReconnectFailed?: () => void;                     // 达到最大重试次数后回调
 }
 
+type ConnectionWaiter = {
+  resolve: (ok: boolean) => void;
+  timeoutId: number;
+};
+
 class SessionWebSocket {
   private ws: WebSocket | null = null;
   private sessionId: string;
@@ -47,6 +53,8 @@ class SessionWebSocket {
   private reconnectAttempts = 0;           // 当前重试次数
   private maxAttemptsReached = false;    // 是否已达到最大重试次数
   private isConnecting = false;            // 是否正在连接中
+  private connectionVersion = 0;           // 连接代次，避免旧连接事件污染新连接
+  private waiters: ConnectionWaiter[] = []; // 等待连接成功的请求
 
   constructor(sessionId: string, projectId: string, callbacks: WSCallbacks) {
     this.sessionId = sessionId;
@@ -82,25 +90,32 @@ class SessionWebSocket {
     const url = `${WS_BASE_URL}/api/ws/chat?session_id=${this.sessionId}&project_id=${this.projectId}&token=${token}`;
     console.log(`[WebSocket] Connecting to session ${this.sessionId} (attempt ${this.reconnectAttempts + 1}/${RECONFIG.maxAttempts})`);
 
+    let socket: WebSocket;
     try {
-      this.ws = new WebSocket(url);
+      socket = new WebSocket(url);
     } catch (err) {
       console.error(`[WebSocket] Failed to create WebSocket for session ${this.sessionId}:`, err);
       this.isConnecting = false;
       this.handleReconnectOrFail();
       return;
     }
+    this.ws = socket;
+    const version = ++this.connectionVersion;
 
     // 设置连接超时 - 10秒内必须建立连接
     this.connectionTimeoutTimer = window.setTimeout(() => {
-      if (this.ws?.readyState !== WebSocket.OPEN) {
+      if (!this.isCurrentSocket(socket, version)) {
+        return;
+      }
+      if (socket.readyState !== WebSocket.OPEN) {
         console.warn(`[WebSocket] Connection timeout for session ${this.sessionId}`);
         this.cleanupConnection();
         this.handleReconnectOrFail();
       }
     }, 10000);
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (!this.isCurrentSocket(socket, version)) return;
       console.log(`[WebSocket] Connected successfully to session ${this.sessionId}`);
       this.clearConnectionTimeout();
       this.isConnecting = false;
@@ -108,9 +123,11 @@ class SessionWebSocket {
       this.reconnectAttempts = 0;
       this.maxAttemptsReached = false;
       this.callbacks.onStatusChange('connected');
+      this.resolveWaiters(true);
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (!this.isCurrentSocket(socket, version)) return;
       try {
         const data = JSON.parse(event.data);
         this.callbacks.onMessage(data);
@@ -120,14 +137,16 @@ class SessionWebSocket {
       }
     };
 
-    this.ws.onerror = (event) => {
+    socket.onerror = (event) => {
+      if (!this.isCurrentSocket(socket, version)) return;
       console.error(`[WebSocket] Error for session ${this.sessionId}:`, event);
       // 错误回调 - 让外部知道有错误发生
       const isFatal = this.reconnectAttempts >= RECONFIG.maxAttempts && this.maxAttemptsReached;
       this.callbacks.onError(new Error('WebSocket 连接错误'), isFatal);
     };
 
-    this.ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      if (!this.isCurrentSocket(socket, version)) return;
       console.log(`[WebSocket] Closed for session ${this.sessionId}: code=${event.code}, reason=${event.reason}, wasClean=${event.wasClean}, intentionalClose=${this.intentionalClose}`);
       this.clearConnectionTimeout();
       this.isConnecting = false;
@@ -143,6 +162,10 @@ class SessionWebSocket {
     };
   }
 
+  private isCurrentSocket(socket: WebSocket, version: number): boolean {
+    return this.ws === socket && this.connectionVersion === version;
+  }
+
   /** 处理重连或失败 */
   private handleReconnectOrFail(): void {
     if (this.reconnectAttempts < RECONFIG.maxAttempts) {
@@ -155,18 +178,41 @@ class SessionWebSocket {
       this.callbacks.onStatusChange('failed');
       this.callbacks.onError(new Error(`连接失败，已尝试 ${RECONFIG.maxAttempts} 次`), true);
       this.callbacks.onReconnectFailed?.();
+      this.scheduleRetryCycleAfterFailed();
     }
+  }
+
+  /** 达到最大重试后自动进入下一轮重连，避免长期卡在 failed */
+  private scheduleRetryCycleAfterFailed(): void {
+    if (this.reconnectTimer || this.intentionalClose) {
+      return;
+    }
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.intentionalClose) return;
+      this.reconnectAttempts = 0;
+      this.maxAttemptsReached = false;
+      this.callbacks.onStatusChange('reconnecting');
+      this.callbacks.onReconnectAttempt?.(0, RECONFIG.maxAttempts);
+      this.connect();
+    }, RECONFIG.failedRetryDelay);
+  }
+
+  private resolveWaiters(ok: boolean): void {
+    if (this.waiters.length === 0) return;
+    const pending = [...this.waiters];
+    this.waiters = [];
+    pending.forEach((w) => {
+      clearTimeout(w.timeoutId);
+      w.resolve(ok);
+    });
   }
 
   /** 清理连接资源 */
   private cleanupConnection(): void {
     this.clearConnectionTimeout();
     if (this.ws) {
-      // 移除事件监听器避免内存泄漏
-      this.ws.onopen = null;
-      this.ws.onmessage = null;
-      this.ws.onerror = null;
-      this.ws.onclose = null;
+      this.detachSocketHandlers(this.ws);
       
       // 如果连接还没关闭，强制关闭
       if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
@@ -174,6 +220,13 @@ class SessionWebSocket {
       }
       this.ws = null;
     }
+  }
+
+  private detachSocketHandlers(socket: WebSocket): void {
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
   }
 
   /** 清理连接超时定时器 */
@@ -185,11 +238,12 @@ class SessionWebSocket {
   }
   
   send(message: any): void {
-    const readyState = this.ws?.readyState;
-    if (readyState === WebSocket.OPEN) {
+    const socket = this.ws;
+    const readyState = socket?.readyState;
+    if (socket && readyState === WebSocket.OPEN) {
       const payload = typeof message === 'string' ? message : JSON.stringify(message);
       console.log(`[WebSocket] Sending to session ${this.sessionId}:`, payload);
-      this.ws.send(payload);
+      socket.send(payload);
     } else {
       console.warn(`[WebSocket] Cannot send message, readyState=${readyState} (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)`);
     }
@@ -207,13 +261,14 @@ class SessionWebSocket {
 
   // 发送停止消息（上游标准格式：{ "type": "Stop" }）
   sendStop(): boolean {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
-      console.warn(`[WebSocket] Cannot send stop, connection not open (state: ${this.ws?.readyState})`);
+    const socket = this.ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      console.warn(`[WebSocket] Cannot send stop, connection not open (state: ${socket?.readyState})`);
       return false;
     }
     const stopFrame = { type: 'stop' };
     console.log(`[WebSocket] Sending stop frame to session ${this.sessionId}:`, stopFrame);
-    this.send(stopFrame);
+    socket.send(JSON.stringify(stopFrame));
     return true;
   }
   
@@ -224,6 +279,7 @@ class SessionWebSocket {
       this.reconnectTimer = null;
     }
     this.cleanupConnection();
+    this.resolveWaiters(false);
   }
 
   /** 完全关闭并重置所有状态（用于清理） */
@@ -237,6 +293,7 @@ class SessionWebSocket {
       this.reconnectTimer = null;
     }
     this.cleanupConnection();
+    this.resolveWaiters(false);
   }
   
   private scheduleReconnect(): void {
@@ -271,12 +328,7 @@ class SessionWebSocket {
     console.log(`[WebSocket] Manual retry triggered for session ${this.sessionId}`);
     this.reconnectAttempts = 0;
     this.maxAttemptsReached = false;
-    this.intentionalClose = false;
-
-    // 关闭现有连接（如果有）
-    if (this.ws) {
-      this.ws.close();
-    }
+    this.isConnecting = false;
 
     // 清除任何待定的重连定时器
     if (this.reconnectTimer) {
@@ -284,8 +336,36 @@ class SessionWebSocket {
       this.reconnectTimer = null;
     }
 
+    // 安全关闭当前连接（先解绑事件，避免旧连接回调污染）
+    this.intentionalClose = true;
+    this.cleanupConnection();
+    this.intentionalClose = false;
+
     // 立即连接
     this.connect();
+  }
+
+  /** 确保连接已就绪：未连接时主动触发重连并等待 onopen */
+  ensureConnected(timeoutMs: number = 8000): Promise<boolean> {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      return Promise.resolve(true);
+    }
+
+    if (this.maxAttemptsReached) {
+      this.retry();
+    } else if (!this.isConnecting && !this.reconnectTimer) {
+      this.connect();
+    } else if (!this.isConnecting && this.ws?.readyState === WebSocket.CLOSED) {
+      this.connect();
+    }
+
+    return new Promise<boolean>((resolve) => {
+      const timeoutId = window.setTimeout(() => {
+        this.waiters = this.waiters.filter((w) => w.timeoutId !== timeoutId);
+        resolve(this.ws?.readyState === WebSocket.OPEN);
+      }, timeoutMs);
+      this.waiters.push({ resolve, timeoutId });
+    });
   }
 
   /** 获取当前重试次数 */

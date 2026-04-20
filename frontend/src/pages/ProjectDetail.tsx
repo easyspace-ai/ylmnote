@@ -618,6 +618,10 @@ export default function ProjectDetail() {
   
   const [isInitializing, setIsInitializing] = useState(true)
   const hasRedirected = useRef(false)
+  const sessionInitRunIdRef = useRef(0)
+  const prevSessionIdRef = useRef<string | undefined>(undefined)
+  const historyRecoveryAtRef = useRef<Record<string, number>>({})
+  const wsRecoveryAtRef = useRef<Record<string, number>>({})
 
   // 无 session 时：加载项目与会话后重定向到第一个会话或新建
   useEffect(() => {
@@ -648,13 +652,28 @@ export default function ProjectDetail() {
 
   // 会话路由切换：切激活会话；先拉会话列表再拉消息。
   useEffect(() => {
+    const runId = ++sessionInitRunIdRef.current
+    let cancelled = false
+
     setActiveMessageSession(urlSessionId)
     if (id && urlSessionId) {
-      // 切换路由时先清空，避免短暂显示上一会话；拉取失败时 fetchMessagesBySession 不再二次清空，故不会「闪一下又空」。
-      clearSessionMessages()
+      const sessionChanged = prevSessionIdRef.current !== urlSessionId
+      prevSessionIdRef.current = urlSessionId
+
+      // 仅在会话变化时清空，避免同会话重复初始化造成空屏闪烁
+      if (sessionChanged) {
+        clearSessionMessages(urlSessionId)
+      }
+
       void (async () => {
-        // 1. 先加载会话列表
-        await fetchSessions(id)
+        // 1. 拉取会话列表，避免在会话不存在时继续后续流程
+        try {
+          await fetchSessions(id)
+        } catch (e) {
+          console.warn('[ProjectDetail] fetchSessions failed during session init:', e)
+        }
+        if (cancelled || sessionInitRunIdRef.current !== runId) return
+
         // 2. 加载历史消息（关键：即使失败也要继续连接 WebSocket）
         try {
           await fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
@@ -662,23 +681,53 @@ export default function ProjectDetail() {
           console.error('[ProjectDetail] Failed to fetch messages:', err)
           // 错误已在 store 中设置，会在 UI 中显示
         }
+        if (cancelled || sessionInitRunIdRef.current !== runId) return
+
         // 3. 建立 WebSocket 连接（独立进行，不影响消息显示）
         // WebSocket 连接在消息加载之后，确保实时消息不会与历史消息冲突
         connectWebSocket(urlSessionId, id)
       })()
     } else if (urlSessionId) {
       clearSessionMessages(urlSessionId)
+      prevSessionIdRef.current = urlSessionId
     } else {
       clearSessionMessages()
+      prevSessionIdRef.current = undefined
     }
 
     // 清理函数：切换会话时断开旧连接
     return () => {
+      cancelled = true
       if (urlSessionId) {
         disconnectWebSocket(urlSessionId)
       }
     }
-  }, [id, urlSessionId, setActiveMessageSession, fetchSessions, fetchMessagesBySession, clearSessionMessages, connectWebSocket, disconnectWebSocket])
+  // 仅按路由参数触发，避免 store action 引用变化导致重复初始化
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, urlSessionId])
+
+  // WS 连接健康检查：切项目后若长时间未连通，主动重试（用户无感）
+  useEffect(() => {
+    if (!id || !urlSessionId) return
+    if (wsStatus === 'connected' || wsStatus === 'connecting' || wsStatus === 'reconnecting') return
+    const now = Date.now()
+    const lastAt = wsRecoveryAtRef.current[urlSessionId] || 0
+    if (now - lastAt < 3000) return
+    wsRecoveryAtRef.current[urlSessionId] = now
+    retryWebSocketConnection(urlSessionId)
+  }, [id, urlSessionId, wsStatus, retryWebSocketConnection])
+
+  // 历史兜底：当会话无消息且当前不在加载中时，按节流策略自动补拉一次历史
+  useEffect(() => {
+    if (!id || !urlSessionId) return
+    if (isLoadingMessages) return
+    if (messages.length > 0) return
+    const now = Date.now()
+    const lastAt = historyRecoveryAtRef.current[urlSessionId] || 0
+    if (now - lastAt < 3000) return
+    historyRecoveryAtRef.current[urlSessionId] = now
+    void fetchMessagesBySession(id, urlSessionId, { mode: 'replaceLatest' })
+  }, [id, urlSessionId, isLoadingMessages, messages.length, wsStatus, fetchMessagesBySession])
 
   useEffect(() => {
     return () => {
@@ -695,7 +744,6 @@ export default function ProjectDetail() {
       Promise.all([
         fetchProject(id),
         queryClient.refetchQueries({ queryKey: ['projects'] }),
-        fetchSessions(id),
         fetchResources(id),
         fetchPromptTemplates(),
         fetchInstalledSkills(),
