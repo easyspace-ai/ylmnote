@@ -75,7 +75,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
 
   const confirm = useCallback((options: Omit<DialogOptions, 'type'>): Promise<boolean> => {
     return new Promise((resolve) => {
-      resolveRef.current = resolve
+      resolveRef.current = (value) => resolve(Boolean(value))
       setDialog({
         isOpen: true,
         type: 'confirm',
@@ -84,14 +84,14 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
         confirmText: options.confirmText || '确认',
         cancelText: options.cancelText || '取消',
         variant: options.variant || 'default',
-        resolve,
+        resolve: resolveRef.current,
       })
     })
   }, [])
 
   const prompt = useCallback((options: Omit<PromptDialogOptions, 'type'>): Promise<string | null> => {
     return new Promise((resolve) => {
-      resolveRef.current = resolve
+      resolveRef.current = (value) => resolve(typeof value === 'string' ? value : null)
       setDialog({
         isOpen: true,
         type: 'prompt',
@@ -102,7 +102,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
         confirmText: options.confirmText || '确认',
         cancelText: options.cancelText || '取消',
         variant: 'default',
-        resolve,
+        resolve: resolveRef.current,
       })
     })
   }, [])
