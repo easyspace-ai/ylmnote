@@ -86,7 +86,7 @@ export interface ModelOption {
   capabilities?: string[]
 }
 
-/** 与项目详情右侧 Studio 栏一致的动作项（来自提示词模板） */
+/** 与笔记详情右侧 Studio 栏一致的动作项（来自提示词模板） */
 export interface StudioAction {
   id: string
   label: string

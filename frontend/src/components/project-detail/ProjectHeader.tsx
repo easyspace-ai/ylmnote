@@ -49,8 +49,8 @@ export function ProjectHeader({
         </Link>
       </div>
 
-      <div className="flex items-center gap-1 group cursor-pointer" onClick={onRename} title="点击修改项目名称">
-        <span className="text-sm font-semibold text-gray-900 truncate max-w-xs">{title || '项目名称'}</span>
+      <div className="flex items-center gap-1 group cursor-pointer" onClick={onRename} title="点击修改笔记名称">
+        <span className="text-sm font-semibold text-gray-900 truncate max-w-xs">{title || '笔记名称'}</span>
         <Pencil size={12} className="text-gray-300 group-hover:text-indigo-500 transition-colors" />
       </div>
 

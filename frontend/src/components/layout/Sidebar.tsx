@@ -24,8 +24,8 @@ export const useSidebarStore = create<{
 const navItems = [
   { icon: Home, label: '主页', path: '/' },
   { icon: Search, label: '搜索', path: '/search' },
-  { icon: FolderOpen, label: '项目', path: '/boards' },
-  { icon: Zap, label: '技能', path: '/skills' },
+  { icon: FolderOpen, label: '笔记', path: '/boards' },
+  // { icon: Zap, label: '技能', path: '/skills' },
 ]
 
 export default function Sidebar() {
@@ -130,7 +130,7 @@ export default function Sidebar() {
           )}
         >
           <Plus size={18} />
-          {!sidebarCollapsed && <span className="text-sm">新建项目</span>}
+          {!sidebarCollapsed && <span className="text-sm">新建笔记</span>}
         </button>
       </div>
 
@@ -138,13 +138,13 @@ export default function Sidebar() {
       <Modal
         isOpen={isNewProjectModalOpen}
         onClose={() => setIsNewProjectModalOpen(false)}
-        title="新建项目"
+        title="新建笔记"
         maxWidth="max-w-md"
       >
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              项目名称 <span className="text-red-500">*</span>
+              笔记名称 <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -163,7 +163,7 @@ export default function Sidebar() {
             <textarea
               value={newProjectForm.description}
               onChange={(e) => setNewProjectForm({ ...newProjectForm, description: e.target.value })}
-              placeholder="这个项目是用来做什么的..."
+              placeholder="这个笔记是用来做什么的..."
               rows={3}
               className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-xl outline-none resize-none focus:bg-white focus:border-primary-400 focus:ring-2 focus:ring-primary-100 transition-all"
             />
@@ -184,7 +184,7 @@ export default function Sidebar() {
                 'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             >
-              {isCreating ? '创建中...' : '创建项目'}
+              {isCreating ? '创建中...' : '创建笔记'}
             </button>
           </div>
         </div>
@@ -194,7 +194,7 @@ export default function Sidebar() {
       {!sidebarCollapsed && (
         <div className="px-3 pb-3">
           <GlobalSearch 
-            placeholder="搜索项目、技能..." 
+            placeholder="搜索笔记、技能..." 
             className="w-full"
           />
         </div>
@@ -233,7 +233,7 @@ export default function Sidebar() {
         {!sidebarCollapsed && projects.length > 0 && (
           <div className="pt-4">
             <p className="px-3 mb-1 text-xs font-medium text-gray-400 uppercase tracking-wider">
-              我的项目
+              我的笔记
             </p>
             <div className="space-y-0.5">
               {projects.slice(0, 5).map((project) => (

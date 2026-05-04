@@ -6,7 +6,7 @@ interface AppState {
   user: User | null
   setUser: (user: User | null) => void
   
-  // 项目状态
+  // 笔记状态
   projects: Project[]
   currentProject: Project | null
   setProjects: (projects: Project[]) => void
@@ -47,7 +47,7 @@ export const useAppStore = create<AppState>((set) => ({
   user: null,
   setUser: (user) => set({ user }),
   
-  // 项目
+  // 笔记
   projects: [],
   currentProject: null,
   setProjects: (projects) => set({ projects }),

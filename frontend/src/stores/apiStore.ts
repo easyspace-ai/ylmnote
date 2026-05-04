@@ -25,7 +25,7 @@ interface AppState {
   streamingBySession: Record<string, boolean>
   error: string | null
   
-  // 项目
+  // 笔记
   projects: TProject[]
   currentProject: TProject | null
   sessions: TSession[]
@@ -51,7 +51,7 @@ interface AppState {
   promptTemplates: TPromptTemplate[]
   
   // Actions
-  // 项目
+  // 笔记
   fetchProjects: (status?: string) => Promise<void>
   fetchProject: (id: string) => Promise<void>
   createProject: (data: { name: string; description?: string }) => Promise<TProject>
@@ -149,7 +149,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   promptTemplates: [],
   sessionSyncMeta: {},
 
-  // 项目操作
+  // 笔记操作
   fetchProjects: async (status?: string) => {
     try {
       set({ loading: true, error: null })

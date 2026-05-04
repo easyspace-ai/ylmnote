@@ -1,6 +1,6 @@
 # YLMNote
 
-AI 驱动的知识管理平台 — 项目管理、实时 AI 对话、资源与技能系统。
+AI 驱动的知识管理平台 — 笔记管理、实时 AI 对话、资源与技能系统。
 
 `Go` `Gin` `GORM` `SQLite` `React` `TypeScript` `Vite` `Zustand` `TanStack Query` `Tailwind CSS` `WebSocket`
 
@@ -24,7 +24,7 @@ make all    # 输出 bin/server + bin/static/
 
 | 文档 | 说明 |
 |------|------|
-| [doc/PROJECT_OVERVIEW.md](doc/PROJECT_OVERVIEW.md) | 项目总览：定位、技术栈、目录结构、快速启动 |
+| [doc/PROJECT_OVERVIEW.md](doc/PROJECT_OVERVIEW.md) | 笔记总览：定位、技术栈、目录结构、快速启动 |
 | [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md) | 架构设计：DDD 分层、模块依赖、数据流 |
 | [doc/API_REFERENCE.md](doc/API_REFERENCE.md) | API 参考：路由、请求/响应格式、认证机制 |
 | [doc/FRONTEND_GUIDE.md](doc/FRONTEND_GUIDE.md) | 前端开发指南：组件体系、状态管理、构建配置 |

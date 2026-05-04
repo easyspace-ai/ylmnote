@@ -1,6 +1,6 @@
 # YLMNote 开发规范
 
-本文档规定了 YLMNote 项目的开发规范，基于现有代码风格总结而成，确保规范与实际代码一致。
+本文档规定了 YLMNote 笔记的开发规范，基于现有代码风格总结而成，确保规范与实际代码一致。
 
 ## 目录
 
@@ -92,7 +92,7 @@ var (
 
 #### 错误处理原则
 
-1. 领域错误在 domain 层定义，供全项目使用
+1. 领域错误在 domain 层定义，供全笔记使用
 2. 应用错误在 application 层定义，与业务逻辑相关
 3. Handler 层根据错误类型返回适当的 HTTP 状态码
 4. 内部错误在开发环境显示详细信息，生产环境隐藏
@@ -370,7 +370,7 @@ src/
 
 ```
 stores/
-├── apiStore.ts              # API 相关状态（项目、消息、技能等）
+├── apiStore.ts              # API 相关状态（笔记、消息、技能等）
 ├── authStore.ts             # 认证状态
 ├── appStore.ts              # 应用级状态
 ├── chatConversationSlice.ts # 聊天会话切片
@@ -438,7 +438,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 ```typescript
 // services/api.ts
 
-// ============ 项目 API ============
+// ============ 笔记 API ============
 export const projectApi = {
   list: (params?: { status?: string; skip?: number; limit?: number }) => { ... },
   get: (id: string) => request<any>(API_ENDPOINTS.project(id)),
@@ -556,7 +556,7 @@ import { cn } from '@/utils'
 #### 样式原则
 
 1. 优先使用 Tailwind 工具类
-2. 颜色使用项目定义的主题色（primary, danger, success 等）
+2. 颜色使用笔记定义的主题色（primary, danger, success 等）
 3. 复杂条件样式使用 `cn()` 工具函数
 4. 全局样式在 `globals.css` 中定义
 5. 动画使用 Tailwind 动画类或定义在 CSS 中
@@ -572,7 +572,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { create } from 'zustand'
 import { useQueryClient } from '@tanstack/react-query'
 
-// 3. 绝对路径导入（项目内部）
+// 3. 绝对路径导入（笔记内部）
 import { useAppStore } from '@/stores/apiStore'
 import { projectApi } from '@/services/api'
 import { cn } from '@/utils'
@@ -619,7 +619,7 @@ feat(auth): 添加用户注册功能
 - 添加邮箱唯一性校验
 - 发送欢迎邮件
 
-fix(api): 修复项目列表分页错误
+fix(api): 修复笔记列表分页错误
 
 docs: 更新 API 文档
 
@@ -656,7 +656,7 @@ docs/api-reference
    - 关联相关 Issue
    - 添加适当的标签
 5. **Code Review**：至少 1 人审核通过
-6. **合并**：使用 Squash Merge 或普通 Merge（根据项目约定）
+6. **合并**：使用 Squash Merge 或普通 Merge（根据笔记约定）
 
 ---
 
@@ -829,4 +829,4 @@ make clean
 
 ---
 
-*本文档基于项目现有代码风格总结，如有更新请以最新代码为准。*
+*本文档基于笔记现有代码风格总结，如有更新请以最新代码为准。*

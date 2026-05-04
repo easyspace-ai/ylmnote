@@ -2,7 +2,7 @@ package project
 
 import "time"
 
-// Project 项目聚合根
+// Project 笔记聚合根
 type Project struct {
 	ID          string
 	UserID      string
@@ -14,7 +14,7 @@ type Project struct {
 	UpdatedAt   time.Time
 }
 
-// Session 会话实体（属于项目，一个项目下可有多个会话）
+// Session 会话实体（属于笔记，一个笔记下可有多个会话）
 type Session struct {
 	ID        string
 	ProjectID string
@@ -23,7 +23,7 @@ type Session struct {
 	UpdatedAt time.Time
 }
 
-// Message 消息实体（属于会话，会话属于项目）
+// Message 消息实体（属于会话，会话属于笔记）
 type Message struct {
 	ID          string
 	UpstreamID  *string
@@ -36,7 +36,7 @@ type Message struct {
 	CreatedAt   time.Time
 }
 
-// Resource 资源实体（属于项目聚合）
+// Resource 资源实体（属于笔记聚合）
 type Resource struct {
 	ID        string
 	ProjectID string

@@ -275,7 +275,7 @@ export default function Settings() {
                   </div>
                   <div>
                     <div className="text-2xl font-semibold">3</div>
-                    <div className="text-sm text-gray-500">项目数</div>
+                    <div className="text-sm text-gray-500">笔记数</div>
                   </div>
                   <div>
                     <div className="text-2xl font-semibold">5</div>
@@ -294,7 +294,7 @@ export default function Settings() {
                     <div className="text-xs text-gray-500">永久免费</div>
                     <ul className="mt-4 space-y-2 text-sm text-gray-600">
                       <li>✓ 100 积分/月</li>
-                      <li>✓ 5 个项目</li>
+                      <li>✓ 5 个笔记</li>
                       <li>✓ 基础技能</li>
                     </ul>
                   </div>
@@ -307,7 +307,7 @@ export default function Settings() {
                     <div className="text-xs text-gray-500">每月</div>
                     <ul className="mt-4 space-y-2 text-sm text-gray-600">
                       <li>✓ 1000 积分/月</li>
-                      <li>✓ 无限项目</li>
+                      <li>✓ 无限笔记</li>
                       <li>✓ 所有技能</li>
                     </ul>
                   </div>
@@ -431,7 +431,7 @@ export default function Settings() {
                 <div className="flex items-center justify-between p-4">
                   <div>
                     <p className="font-medium">每周摘要</p>
-                    <p className="text-sm text-gray-500">每周项目活动摘要</p>
+                    <p className="text-sm text-gray-500">每周笔记活动摘要</p>
                   </div>
                   <button
                     onClick={() => setNotifications({ ...notifications, weekly: !notifications.weekly })}
@@ -461,7 +461,7 @@ export default function Settings() {
                 <div className="flex items-center justify-between p-4">
                   <div>
                     <p className="font-medium">导出数据</p>
-                    <p className="text-sm text-gray-500">导出所有项目数据</p>
+                    <p className="text-sm text-gray-500">导出所有笔记数据</p>
                   </div>
                   <button className="flex items-center gap-2 px-4 py-2 border border-gray-300 hover:bg-gray-50">
                     导出

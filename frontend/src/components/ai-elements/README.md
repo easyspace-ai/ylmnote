@@ -12,7 +12,7 @@
 
 ## 安装
 
-组件已包含在项目中，直接从 `@/components/ai-elements` 导入即可。
+组件已包含在笔记中，直接从 `@/components/ai-elements` 导入即可。
 
 ## 快速开始
 

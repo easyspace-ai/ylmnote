@@ -279,7 +279,7 @@ function DialogOverlay({
   )
 }
 
-// 模态框组件（用于新建项目等）
+// 模态框组件（用于新建笔记等）
 interface ModalProps {
   isOpen: boolean
   onClose: () => void

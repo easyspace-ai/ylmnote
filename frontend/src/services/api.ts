@@ -65,9 +65,9 @@ async function request<T>(
   return response.json()
 }
 
-// ============ 项目 API ============
+// ============ 笔记 API ============
 export const projectApi = {
-  // 获取项目列表
+  // 获取笔记列表
   list: (params?: { status?: string; skip?: number; limit?: number }) => {
         const cleanParams: Record<string, string> = {}
     if (params) {
@@ -81,24 +81,24 @@ export const projectApi = {
     return request<any[]>(`${API_ENDPOINTS.projects}${query ? `?${query}` : ''}`)
   },
   
-  // 获取项目详情
+  // 获取笔记详情
   get: (id: string) => request<any>(API_ENDPOINTS.project(id)),
   
-  // 创建项目
+  // 创建笔记
   create: (data: { name: string; description?: string }) =>
     request<any>(API_ENDPOINTS.projects, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
   
-  // 更新项目
+  // 更新笔记
   update: (id: string, data: Partial<{ name: string; description: string; status: string }>) =>
     request<any>(API_ENDPOINTS.project(id), {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
   
-  // 删除项目
+  // 删除笔记
   delete: (id: string) =>
     request<{ message: string }>(API_ENDPOINTS.project(id), {
       method: 'DELETE',
@@ -128,7 +128,7 @@ export const projectApi = {
     }
     return response.json()
   },
-  // 会话：按项目列出、创建
+  // 会话：按笔记列出、创建
   listSessions: (projectId: string) =>
     request<any[]>(`${API_ENDPOINTS.projectSessions(projectId)}?limit=100`),
   createSession: (projectId: string, data?: { title?: string }) =>
@@ -160,7 +160,7 @@ export const projectApi = {
     return request<any>(`${API_ENDPOINTS.projectSession(projectId, sessionId)}/history${queryString ? `?${queryString}` : ''}`)
   },
 
-  // 获取消息列表（按项目，兼容）
+  // 获取消息列表（按笔记，兼容）
   getMessages: (projectId: string) =>
     request<any[]>(API_ENDPOINTS.projectMessages(projectId)),
 

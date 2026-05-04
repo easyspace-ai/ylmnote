@@ -91,7 +91,7 @@ function CategoryHeader({ title, count }: { title: string; count: number }) {
 }
 
 export default function GlobalSearch({
-  placeholder = '搜索项目、技能...',
+  placeholder = '搜索笔记、技能...',
   onFocus,
   className,
   showShortcut = true,
@@ -159,7 +159,7 @@ export default function GlobalSearch({
         id: p.id,
         name: p.name,
         description: p.description,
-        category: '项目',
+        category: '笔记',
         type: 'project',
       })
     })

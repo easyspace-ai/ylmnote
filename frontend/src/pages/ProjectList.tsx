@@ -14,7 +14,7 @@ type FilterType = 'recent' | 'active' | 'archived'
 type ViewMode = 'grid' | 'list'
 type SortBy = 'updated' | 'created' | 'name'
 
-// 项目卡片操作菜单
+// 笔记卡片操作菜单
 function ProjectCardMenu({ 
   projectId, 
   status,
@@ -106,10 +106,10 @@ export default function ProjectList() {
     const project = projects.find(p => p.id === id)
     if (!project) return
     const newName = await prompt({
-      title: '重命名项目',
-      message: '请输入新的项目名称',
+      title: '重命名笔记',
+      message: '请输入新的笔记名称',
       defaultValue: project.name,
-      placeholder: '项目名称',
+      placeholder: '笔记名称',
     })
     if (newName && newName !== project.name) {
       await updateProject(id, { name: newName } as any)
@@ -129,8 +129,8 @@ export default function ProjectList() {
 
   const handleDelete = async (id: string) => {
     const confirmed = await confirm({
-      title: '删除项目',
-      message: '确定要删除这个项目吗？此操作不可恢复。',
+      title: '删除笔记',
+      message: '确定要删除这个笔记吗？此操作不可恢复。',
       variant: 'danger',
       confirmText: '删除',
       cancelText: '取消',
@@ -146,7 +146,7 @@ export default function ProjectList() {
   }
   
   const handleCreateProject = async () => {
-    const project = await createProject({ name: '新项目' })
+    const project = await createProject({ name: '新笔记' })
     if (project) {
       void queryClient.invalidateQueries({ queryKey: ['projects'] })
       navigate(`/boards/${project.id}`)
@@ -176,22 +176,22 @@ export default function ProjectList() {
               <FolderOpen className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-h1 text-gray-900">项目</h1>
-              <p className="text-sm text-gray-500">管理你的所有 AI 协作项目</p>
+              <h1 className="text-h1 text-gray-900">笔记</h1>
+              <p className="text-sm text-gray-500">管理你的所有 AI 协作笔记</p>
             </div>
           </div>
           
           <div className="flex items-center gap-3">
-            <button className="btn-ghost">
+            {/* <button className="btn-ghost">
               <Clock size={18} />
               <span>定时任务</span>
-            </button>
+            </button> */}
             <button
               onClick={handleCreateProject}
               className="btn-primary"
             >
               <Plus size={18} />
-              <span>新建项目</span>
+              <span>新建笔记</span>
             </button>
           </div>
         </div>
@@ -233,7 +233,7 @@ export default function ProjectList() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
-                placeholder="搜索项目..."
+                placeholder="搜索笔记..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="input-base pl-9 w-64"
@@ -275,7 +275,7 @@ export default function ProjectList() {
           </div>
         </div>
         
-        {/* 项目列表 */}
+        {/* 笔记列表 */}
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="w-12 h-12 border-3 border-gray-200 border-t-primary-600 rounded-full animate-spin mb-4" />
@@ -385,10 +385,10 @@ export default function ProjectList() {
               <FolderOpen className="w-10 h-10 text-gray-300" />
             </div>
             <h3 className="empty-state-title">
-              {searchQuery ? '没有找到匹配的项目' : '还没有项目'}
+              {searchQuery ? '没有找到匹配的笔记' : '还没有笔记'}
             </h3>
             <p className="empty-state-desc">
-              {searchQuery ? '试试其他关键词' : '创建你的第一个项目，开始 AI 协作之旅'}
+              {searchQuery ? '试试其他关键词' : '创建你的第一个笔记，开始 AI 协作之旅'}
             </p>
             {!searchQuery && (
               <button
@@ -396,7 +396,7 @@ export default function ProjectList() {
                 className="btn-primary"
               >
                 <Plus size={18} />
-                创建项目
+                创建笔记
               </button>
             )}
           </div>

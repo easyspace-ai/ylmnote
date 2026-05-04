@@ -58,7 +58,7 @@ export default function HomePage() {
     setIsLoading(true)
     try {
       const project = await useAppStore.getState().createProject({
-        name: inputValue.substring(0, 30) || '新项目',
+        name: inputValue.substring(0, 30) || '新笔记',
       })
       void queryClient.invalidateQueries({ queryKey: ['projects'] })
       navigate(`/boards/${project.id}`, {
@@ -85,7 +85,7 @@ export default function HomePage() {
        setIsLoading(true)
        try {
          const project = await useAppStore.getState().createProject({
-           name: text.substring(0, 30) || '新项目',
+           name: text.substring(0, 30) || '新笔记',
          })
          void queryClient.invalidateQueries({ queryKey: ['projects'] })
          navigate(`/boards/${project.id}`, {

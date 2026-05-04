@@ -103,7 +103,7 @@ type ResourceRefInput struct {
 // ChatInput 对话入参
 type ChatInput struct {
 	Message      string
-	ProjectID    *string // 必填，会话归属项目
+	ProjectID    *string // 必填，会话归属笔记
 	SessionID    *string // 可选，不传则新建会话
 	SkillID      *string
 	Attachments  map[string]interface{}
@@ -121,8 +121,6 @@ type ChatResult struct {
 	SkillID   *string
 	CreatedAt time.Time
 }
-
-
 
 const maxTitleRunes = 28
 
@@ -148,7 +146,7 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 	projectID = *in.ProjectID
 	if _, err := s.projectRepo.GetByIDAndUserID(projectID, userID); err != nil {
 		if isRepoNotFound(err) {
-			return "", "", fmt.Errorf("项目不存在或无权访问")
+			return "", "", fmt.Errorf("笔记不存在或无权访问")
 		}
 		return "", "", err
 	}
@@ -159,7 +157,7 @@ func (s *Service) prepareSessionAndSaveUserMessage(ctx context.Context, userID s
 		sess, err := s.sessionRepo.GetByIDAndProjectID(*in.SessionID, projectID)
 		if err != nil {
 			if isRepoNotFound(err) {
-				return "", "", fmt.Errorf("会话不存在或已删除，请返回项目页刷新后再试")
+				return "", "", fmt.Errorf("会话不存在或已删除，请返回笔记页刷新后再试")
 			}
 			return "", "", err
 		}
@@ -235,7 +233,7 @@ func (s *Service) resolveResourceRefs(projectID string, in ChatInput) ([]sdktype
 		}
 		loaded, err := s.loadResourceRef(projectID, refID)
 		if err != nil {
-			// 前端可能仍带着已删除资料、或跨项目残留 id；跳过以免整轮对话失败。
+			// 前端可能仍带着已删除资料、或跨笔记残留 id；跳过以免整轮对话失败。
 			if isRepoNotFound(err) {
 				slog.Warn("chat_skip_missing_resource_ref", slog.String("project_id", projectID), slog.String("resource_id", refID))
 				continue
@@ -453,8 +451,6 @@ func inferArtifactResourceType(name string) string {
 	}
 }
 
-
-
 func strOrEmpty(v *string) string {
 	if v == nil {
 		return ""
@@ -479,8 +475,6 @@ func (s *Service) EnsureProjectBelongsToUser(projectID, userID string) error {
 	_, err := s.projectRepo.GetByIDAndUserID(projectID, userID)
 	return err
 }
-
-
 
 func toString(v any) string {
 	s, _ := v.(string)

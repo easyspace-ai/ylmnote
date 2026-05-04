@@ -23,7 +23,7 @@ import (
 // ResourceRepository 资源仓储接口别名
 type ResourceRepository = projectdomain.ResourceRepository
 
-// ProjectHandler 项目/消息/资源/上传 HTTP 处理
+// ProjectHandler 笔记/消息/资源/上传 HTTP 处理
 type ProjectHandler struct {
 	svc          *project.Service
 	aiSDK        *sdkclient.Client
@@ -41,7 +41,7 @@ func (h *ProjectHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/:project_id", h.getProject)
 	r.PATCH("/:project_id", h.updateProject)
 	r.DELETE("/:project_id", h.deleteProject)
-	// 会话：一个项目下多个会话
+	// 会话：一个笔记下多个会话
 	r.GET("/:project_id/sessions", h.listSessions)
 	r.POST("/:project_id/sessions", h.createSession)
 	r.PATCH("/:project_id/sessions/:session_id", h.updateSession)
@@ -49,7 +49,7 @@ func (h *ProjectHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.DELETE("/:project_id/sessions/:session_id", h.deleteSession)
 	r.GET("/:project_id/sessions/:session_id/messages", h.listMessagesBySession)
 	r.GET("/:project_id/sessions/:session_id/history", h.getSessionHistory) // 代理上游历史消息
-	// 消息（按项目维度保留兼容；按会话维度用上面）
+	// 消息（按笔记维度保留兼容；按会话维度用上面）
 	r.GET("/:project_id/messages", h.listMessages)
 	r.POST("/:project_id/messages", h.createMessage)
 	r.PATCH("/:project_id/messages/:message_id", h.updateMessage)
@@ -677,76 +677,19 @@ func (h *ProjectHandler) downloadArtifact(c *gin.Context) {
 		return
 	}
 
-	// 2. 如果有文件路径（url 字段以 file: 开头），优先从本地读取
-	if resource.URL != nil && strings.HasPrefix(*resource.URL, "file:") {
-		filePath := strings.TrimPrefix(*resource.URL, "file:")
-		// 安全检查：确保文件路径在允许的目录内
-		absPath, err := filepath.Abs(filePath)
+	data, contentType, err := h.getArtifactData(c.Request.Context(), resource)
+	if err != nil || len(data) == 0 {
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid file path"})
-			return
+			log.Printf("[downloadArtifact] getArtifactData failed resource=%s name=%q err=%v", resource.ID, resource.Name, err)
 		}
-		// 读取文件内容
-		data, err := persistence.ReadFileSafe(absPath)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
-			return
-		}
-		// 根据文件扩展名推断 Content-Type
-		contentType := inferContentTypeFromExt(resource.Name)
-
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
-		c.Data(200, contentType, data)
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact content not available"})
 		return
 	}
-
-	// 3. source: 前缀：尝试从上游 SDK 获取内容
-	if resource.URL != nil && strings.HasPrefix(*resource.URL, "source:") {
-		sourceID := strings.TrimPrefix(*resource.URL, "source:")
-		// 优先使用已存储的 content
-		if resource.Content != nil && *resource.Content != "" {
-			contentType := inferContentTypeFromExt(resource.Name)
-			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
-			c.Data(200, contentType, []byte(*resource.Content))
-			return
-		}
-		// 尝试从上游 SDK 获取
-		if h.wsSDK != nil && sourceID != "" {
-			ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-			defer cancel()
-			data, contentType, err := h.wsSDK.DownloadSource(ctx, sourceID)
-			if err == nil && len(data) > 0 {
-				c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
-				c.Data(200, contentType, data)
-				return
-			}
-			log.Printf("[downloadArtifact] SDK download failed for source %s: %v", sourceID, err)
-		}
-		c.JSON(http.StatusNotFound, gin.H{"error": "artifact content not available for source-type resource"})
-		return
+	if contentType == "" {
+		contentType = inferContentTypeFromExt(resource.Name)
 	}
-
-	// 4. sdk-file: 前缀 fallback：如果 content 字段有值，直接返回 content
-	if resource.URL != nil && strings.HasPrefix(*resource.URL, "sdk-file:") {
-		if resource.Content != nil && *resource.Content != "" {
-			contentType := inferContentTypeFromExt(resource.Name)
-			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
-			c.Data(200, contentType, []byte(*resource.Content))
-			return
-		}
-		c.JSON(http.StatusNotFound, gin.H{"error": "artifact content not available for sdk-file-type resource"})
-		return
-	}
-
-	// 5. 最后 fallback：如果有 content 字段，直接返回内容
-	if resource.Content != nil && *resource.Content != "" {
-		contentType := inferContentTypeFromExt(resource.Name)
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
-		c.Data(200, contentType, []byte(*resource.Content))
-		return
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{"error": "artifact content not available"})
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, resource.Name))
+	c.Data(http.StatusOK, contentType, data)
 }
 
 // inferContentTypeFromExt 根据文件扩展名推断 Content-Type
@@ -927,7 +870,21 @@ func (h *ProjectHandler) previewArtifact(c *gin.Context) {
 		return
 	}
 
-	// 6. PPT/PPTX 类型：不支持预览
+	// 6. PDF：返回原始字节供前端 pdf.js / react-pdf 渲染（此前落入「其他类型」返回 JSON 会导致 Invalid PDF structure）
+	if ext == ".pdf" || resource.Type == "pdf" {
+		data, contentType, err := h.getArtifactData(c.Request.Context(), resource)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		if contentType == "" {
+			contentType = "application/pdf"
+		}
+		c.Data(http.StatusOK, contentType, data)
+		return
+	}
+
+	// 7. PPT/PPTX 类型：不支持预览
 	if ext == ".ppt" || ext == ".pptx" {
 		c.JSON(200, gin.H{
 			"preview_supported": false,
@@ -936,7 +893,7 @@ func (h *ProjectHandler) previewArtifact(c *gin.Context) {
 		return
 	}
 
-	// 7. 其他类型：不支持预览
+	// 8. 其他类型：不支持预览
 	c.JSON(200, gin.H{
 		"preview_supported": false,
 		"message":           "该文件类型不支持预览，请下载后查看",
@@ -970,10 +927,9 @@ func isVideoExt(ext string) bool {
 	return false
 }
 
-// getArtifactData 获取 artifact 的数据和 Content-Type
-// 优先从 file: 路径读取，其次从 content 字段获取，最后尝试从上游 SDK 获取 source: 资源
+// getArtifactData 获取 artifact 的字节与 Content-Type（下载与预览共用）
+// 顺序：file: → w6-file: → DB content → sdk-file（经 SDK 按 file_id 拉取）→ source: → http(s) 直链
 func (h *ProjectHandler) getArtifactData(ctx context.Context, resource *projectdomain.Resource) ([]byte, string, error) {
-	// 优先从 file: 路径读取
 	if resource.URL != nil && strings.HasPrefix(*resource.URL, "file:") {
 		filePath := strings.TrimPrefix(*resource.URL, "file:")
 		absPath, err := filepath.Abs(filePath)
@@ -987,21 +943,80 @@ func (h *ProjectHandler) getArtifactData(ctx context.Context, resource *projectd
 		return data, inferContentTypeFromExt(resource.Name), nil
 	}
 
-	// 从 content 字段获取
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "w6-file:") {
+		p := strings.TrimPrefix(*resource.URL, "w6-file:")
+		absPath, err := filepath.Abs(p)
+		if err == nil {
+			if data, err := persistence.ReadFileSafe(absPath); err == nil && len(data) > 0 {
+				return data, inferContentTypeFromExt(resource.Name), nil
+			}
+		}
+	}
+
 	if resource.Content != nil && *resource.Content != "" {
 		return []byte(*resource.Content), inferContentTypeFromExt(resource.Name), nil
 	}
 
-	// 尝试从 source: 路径通过 SDK 获取
-	if resource.URL != nil && strings.HasPrefix(*resource.URL, "source:") {
-		sourceID := strings.TrimPrefix(*resource.URL, "source:")
-		if h.wsSDK != nil && sourceID != "" {
-			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "sdk-file:") {
+		fileID := strings.TrimSpace(strings.TrimPrefix(*resource.URL, "sdk-file:"))
+		if h.wsSDK != nil && fileID != "" {
+			dlCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 			defer cancel()
-			data, contentType, err := h.wsSDK.DownloadSource(ctx, sourceID)
+			data, contentType, err := h.wsSDK.DownloadSource(dlCtx, fileID)
 			if err == nil && len(data) > 0 {
+				if strings.TrimSpace(contentType) == "" {
+					contentType = inferContentTypeFromExt(resource.Name)
+				}
 				return data, contentType, nil
 			}
+			log.Printf("[getArtifactData] sdk-file DownloadSource failed file_id=%s err=%v", fileID, err)
+		}
+		return nil, "", fmt.Errorf("content not available")
+	}
+
+	if resource.URL != nil && strings.HasPrefix(*resource.URL, "source:") {
+		sourceID := strings.TrimSpace(strings.TrimPrefix(*resource.URL, "source:"))
+		if h.wsSDK != nil && sourceID != "" {
+			dlCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+			defer cancel()
+			data, contentType, err := h.wsSDK.DownloadSource(dlCtx, sourceID)
+			if err == nil && len(data) > 0 {
+				if strings.TrimSpace(contentType) == "" {
+					contentType = inferContentTypeFromExt(resource.Name)
+				}
+				return data, contentType, nil
+			}
+			log.Printf("[getArtifactData] source DownloadSource failed id=%s err=%v", sourceID, err)
+		}
+		return nil, "", fmt.Errorf("content not available")
+	}
+
+	if resource.URL != nil {
+		raw := strings.TrimSpace(*resource.URL)
+		if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+			dlCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, raw, nil)
+			if err != nil {
+				return nil, "", fmt.Errorf("invalid url")
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return nil, "", err
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return nil, "", fmt.Errorf("remote fetch failed: %s", resp.Status)
+			}
+			data, err := io.ReadAll(resp.Body)
+			if err != nil || len(data) == 0 {
+				return nil, "", fmt.Errorf("content not available")
+			}
+			ct := strings.TrimSpace(resp.Header.Get("Content-Type"))
+			if ct == "" {
+				ct = inferContentTypeFromExt(resource.Name)
+			}
+			return data, ct, nil
 		}
 	}
 
@@ -1019,7 +1034,7 @@ func (h *ProjectHandler) getSessionHistory(c *gin.Context) {
 	projectID := c.Param("project_id")
 	sessionID := c.Param("session_id")
 
-	// 验证项目归属
+	// 验证笔记归属
 	if err := h.svc.EnsureProjectBelongsToUser(projectID, u.ID); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "Project not found"})
 		return

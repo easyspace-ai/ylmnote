@@ -1,6 +1,6 @@
 # YLMNote 部署运维指南
 
-本文档提供 YLMNote 项目的完整部署、运维和配置说明。
+本文档提供 YLMNote 笔记的完整部署、运维和配置说明。
 
 ## 1. 环境要求
 
@@ -133,7 +133,7 @@ sudo yum install -y gcc glibc-devel
 
 ## 3. 本地开发环境搭建
 
-### 3.1 克隆项目
+### 3.1 克隆笔记
 
 ```bash
 git clone <repository-url>
@@ -200,7 +200,7 @@ server: {
 
 ## 4. 构建流程
 
-项目使用 Makefile 统一管理构建流程。
+笔记使用 Makefile 统一管理构建流程。
 
 ### 4.1 完整构建
 
@@ -361,7 +361,7 @@ module.exports = {
 ### 6.2 部署步骤
 
 ```bash
-# 1. 构建项目
+# 1. 构建笔记
 make all
 
 # 2. 确保 .env 文件存在且配置正确

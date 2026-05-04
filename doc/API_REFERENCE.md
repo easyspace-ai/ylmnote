@@ -165,13 +165,13 @@ Base: `/api/auth`
 
 ---
 
-## 3. 项目 (Projects)
+## 3. 笔记 (Projects)
 
 Base: `/api/projects`，**所有端点需要认证。**
 
 ### GET /api/projects
 
-列出当前用户的项目。
+列出当前用户的笔记。
 
 查询参数：
 
@@ -187,8 +187,8 @@ Base: `/api/projects`，**所有端点需要认证。**
 [
   {
     "id": "uuid",
-    "name": "我的项目",
-    "description": "项目描述",
+    "name": "我的笔记",
+    "description": "笔记描述",
     "cover_image": "https://...",
     "status": "active",
     "created_at": "2025-01-01T00:00:00Z",
@@ -203,19 +203,19 @@ Base: `/api/projects`，**所有端点需要认证。**
 
 ### POST /api/projects
 
-创建项目。
+创建笔记。
 
 请求 Body：
 
 ```json
 {
   "name": "string (必填)",
-  "description": "项目描述 (可选)",
+  "description": "笔记描述 (可选)",
   "cover_image": "https://... (可选)"
 }
 ```
 
-成功响应 `200 OK`：同项目对象格式。
+成功响应 `200 OK`：同笔记对象格式。
 
 错误响应：
 
@@ -228,9 +228,9 @@ Base: `/api/projects`，**所有端点需要认证。**
 
 ### GET /api/projects/:project_id
 
-获取项目详情。
+获取笔记详情。
 
-成功响应 `200 OK`：同项目对象格式。
+成功响应 `200 OK`：同笔记对象格式。
 
 错误响应：
 
@@ -242,7 +242,7 @@ Base: `/api/projects`，**所有端点需要认证。**
 
 ### PATCH /api/projects/:project_id
 
-更新项目。
+更新笔记。
 
 请求 Body：
 
@@ -255,7 +255,7 @@ Base: `/api/projects`，**所有端点需要认证。**
 }
 ```
 
-成功响应 `200 OK`：同项目对象格式。
+成功响应 `200 OK`：同笔记对象格式。
 
 错误响应：
 
@@ -268,7 +268,7 @@ Base: `/api/projects`，**所有端点需要认证。**
 
 ### DELETE /api/projects/:project_id
 
-删除项目。
+删除笔记。
 
 成功响应 `200 OK`：
 
@@ -292,7 +292,7 @@ Base: `/api/projects/:project_id/sessions`，**所有端点需要认证。**
 
 ### GET /api/projects/:project_id/sessions
 
-列出项目下的会话。
+列出笔记下的会话。
 
 查询参数：
 
@@ -401,7 +401,7 @@ Base: `/api/projects/:project_id`，**所有端点需要认证。**
 
 ### GET /api/projects/:project_id/messages
 
-列出项目所有消息（项目维度）。
+列出笔记所有消息（笔记维度）。
 
 查询参数：
 
@@ -507,7 +507,7 @@ Base: `/api/projects/:project_id`，**所有端点需要认证。**
 
 ### GET /api/projects/:project_id/resources
 
-列出项目资源。
+列出笔记资源。
 
 查询参数：
 
@@ -660,7 +660,7 @@ event: progress
 data: {"step":"got_artefact","message":"已生成，正在拉取结果..."}
 
 event: progress
-data: {"step":"saving","message":"正在保存到项目..."}
+data: {"step":"saving","message":"正在保存到笔记..."}
 
 event: progress
 data: {"step":"done","message":"完成"}
@@ -896,7 +896,7 @@ data: {"type":"error","value":"ai error: ..."}
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `project_id` | string | 是 | 项目 ID |
+| `project_id` | string | 是 | 笔记 ID |
 | `session_id` | string | 是 | 会话 ID |
 | `skip` | int | 否 | 偏移量（默认 0） |
 | `limit` | int | 否 | 每页数量（默认 20，最大 200） |
@@ -922,7 +922,7 @@ data: {"type":"error","value":"ai error: ..."}
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `project_id` | string | 是 | 项目 ID |
+| `project_id` | string | 是 | 笔记 ID |
 | `session_id` | string | 是 | 会话 ID |
 
 成功响应 `200 OK`：上游网关视图对象。
@@ -1289,7 +1289,7 @@ Base: `/api/user`，**所有端点需要认证。**
 | 400 | 请求无效 | 参数缺失、格式错误、上游会话未绑定 |
 | 401 | 未认证 | 缺少 Token、Token 无效或过期 |
 | 402 | 积分不足 | 对话时余额不足 |
-| 404 | 资源不存在 | 项目/会话/消息/技能/模板不存在 |
+| 404 | 资源不存在 | 笔记/会话/消息/技能/模板不存在 |
 | 409 | 冲突 | 上游会话 ID 冲突 |
 | 500 | 服务器内部错误 | 服务异常 |
 | 501 | 未实现 | W6 PageMaker 未配置、上游停止不支持 |

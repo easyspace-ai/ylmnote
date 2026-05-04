@@ -20,7 +20,7 @@ func main() {
 	var (
 		httpBase    = flag.String("http", "", "若设置则走 HTTP（例如 http://127.0.0.1:8080），不再连库")
 		token       = flag.String("token", "", "HTTP 模式下的 Bearer token（也可用环境变量 JWT）")
-		projectID   = flag.String("project", "", "项目 ID（必填）")
+		projectID   = flag.String("project", "", "笔记 ID（必填）")
 		sessionID   = flag.String("session", "", "会话 ID（必填）")
 		limit       = flag.Int("limit", 200, "条数上限（与 API 一致，最大 200）")
 		skip        = flag.Int("skip", 0, "跳过条数")

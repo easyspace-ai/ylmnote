@@ -4,7 +4,7 @@ import (
 	"github.com/easyspace-ai/ylmnote/internal/domain/project"
 )
 
-// ProjectRepository 项目仓储 GORM 实现
+// ProjectRepository 笔记仓储 GORM 实现
 type ProjectRepository struct {
 	db *DB
 }

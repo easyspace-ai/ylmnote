@@ -1,6 +1,6 @@
 # YLMNote 前端开发指南
 
-本文档详细介绍 YLMNote 项目的前端架构、技术栈和开发规范。
+本文档详细介绍 YLMNote 笔记的前端架构、技术栈和开发规范。
 
 ## 1. 技术栈与依赖
 
@@ -66,14 +66,14 @@ export default defineConfig({
 
 ---
 
-## 2. 项目结构
+## 2. 笔记结构
 
 ```
 frontend/src/
 ├── components/          # 组件目录
 │   ├── ai-elements/     # AI 聊天相关组件库
 │   ├── layout/          # 布局组件
-│   ├── project-detail/  # 项目详情页子组件
+│   ├── project-detail/  # 笔记详情页子组件
 │   ├── ui/              # 基础 UI 组件
 │   ├── AIChatBoxNew.tsx # 聊天组件封装
 │   ├── ErrorBoundary.tsx# 错误边界
@@ -131,10 +131,10 @@ frontend/src/
 | `/register` | Register | 注册页 | 公开 |
 | `/` | HomePage | 首页 | 需登录 |
 | `/search` | SearchPage | 搜索页 | 需登录 |
-| `/boards` | ProjectList | 项目列表 | 需登录 |
-| `/boards/new` | NewProject | 新建项目 | 需登录 |
-| `/boards/:id` | ProjectDetail | 项目详情 | 需登录 |
-| `/boards/:id/sessions/:sessionId` | ProjectDetail | 项目会话详情 | 需登录 |
+| `/boards` | ProjectList | 笔记列表 | 需登录 |
+| `/boards/new` | NewProject | 新建笔记 | 需登录 |
+| `/boards/:id` | ProjectDetail | 笔记详情 | 需登录 |
+| `/boards/:id/sessions/:sessionId` | ProjectDetail | 笔记会话详情 | 需登录 |
 | `/skills` | SkillList | 技能列表 | 需登录 |
 | `/settings` | Settings | 设置页 | 需登录 |
 
@@ -166,9 +166,9 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 | 页面 | 文件 | 核心职责 |
 |------|------|----------|
 | HomePage | `pages/HomePage.tsx` | 首页展示、快捷入口、推荐技能 |
-| ProjectList | `pages/ProjectList.tsx` | 项目列表、筛选、排序 |
-| ProjectDetail | `pages/ProjectDetail.tsx` | 项目详情、三栏布局、流式对话 |
-| NewProject | `pages/NewProject.tsx` | 创建新项目 |
+| ProjectList | `pages/ProjectList.tsx` | 笔记列表、筛选、排序 |
+| ProjectDetail | `pages/ProjectDetail.tsx` | 笔记详情、三栏布局、流式对话 |
+| NewProject | `pages/NewProject.tsx` | 创建新笔记 |
 | SkillList | `pages/SkillList.tsx` | 技能市场、已安装技能 |
 | Settings | `pages/Settings.tsx` | 用户设置、提示词模板管理 |
 | SearchPage | `pages/SearchPage.tsx` | 全局搜索结果展示 |
@@ -179,14 +179,14 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 **初始化流程：**
 
 1. **无 sessionId 时**：
-   - 加载项目详情 (`fetchProject`)
+   - 加载笔记详情 (`fetchProject`)
    - 获取会话列表 (`fetchSessions`)
    - 等待后端创建默认会话（轮询 3 次，每次 250ms）
    - 优先恢复上次会话（localStorage 缓存）
    - 重定向到 `/boards/:id/sessions/:sessionId`
 
 2. **有 sessionId 时**：
-   - 并行加载：项目、会话列表、资源、提示词模板、已安装技能
+   - 并行加载：笔记、会话列表、资源、提示词模板、已安装技能
    - 设置激活会话 (`setActiveMessageSession`)
    - 加载会话消息 (`fetchMessagesBySession`)
    - 延迟 1.2s 再次刷新消息（确保拿到完整历史）
@@ -257,7 +257,7 @@ interface AppState {
   streamingBySession: Record<string, boolean>
   error: string | null
   
-  // 项目
+  // 笔记
   projects: TProject[]
   currentProject: TProject | null
   sessions: TSession[]
@@ -280,7 +280,7 @@ interface AppState {
 
 | 类别 | Action | 说明 |
 |------|--------|------|
-| 项目 CRUD | `fetchProjects`, `fetchProject`, `createProject`, `updateProject`, `deleteProject` | 项目管理 |
+| 笔记 CRUD | `fetchProjects`, `fetchProject`, `createProject`, `updateProject`, `deleteProject` | 笔记管理 |
 | 会话管理 | `fetchSessions`, `createSession`, `updateSession`, `deleteSession`, `bindSessionUpstream` | 会话操作 |
 | 消息管理 | `fetchMessagesBySession`, `loadOlderMessages`, `updateMessage`, `deleteMessage` | 消息操作 |
 | 资源管理 | `fetchResources`, `createResource`, `updateResource`, `deleteResource`, `uploadResource` | 资源操作 |
@@ -315,7 +315,7 @@ interface AppState {
   // 用户
   user: User | null
   
-  // 项目
+  // 笔记
   projects: Project[]
   currentProject: Project | null
   
@@ -372,7 +372,7 @@ fetchMessagesBySession: async (projectId, sessionId, options) => {
 `services/api.ts` 按领域划分：
 
 ```typescript
-// 项目 API
+// 笔记 API
 export const projectApi = {
   list, get, create, update, delete,
   uploadResource, listSessions, createSession, updateSession,
@@ -677,7 +677,7 @@ components/
 ├── layout/                # 布局组件
 │   ├── MainLayout.tsx     # 主布局
 │   └── Sidebar.tsx        # 侧边栏
-├── project-detail/        # 项目详情子组件
+├── project-detail/        # 笔记详情子组件
 │   ├── ProjectHeader.tsx
 │   ├── LeftPane.tsx
 │   └── RightStudioPane.tsx
@@ -748,11 +748,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { co
 - 300ms 防抖搜索
 - 键盘导航（↑↓Enter Esc）
 - Cmd/Ctrl + K 快捷键
-- 分类展示（项目/技能/文档）
+- 分类展示（笔记/技能/文档）
 
 ```typescript
 export default function GlobalSearch({
-  placeholder = '搜索项目、技能...',
+  placeholder = '搜索笔记、技能...',
   onFocus,
   className,
   showShortcut = true,

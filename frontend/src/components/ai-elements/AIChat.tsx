@@ -308,7 +308,7 @@ export function AIChat({
   const handleAddFromLibrary = useCallback(
     (file: { id: string; name: string }) => {
       if (upstreamInputLocked || isStreaming) return
-      // id 必须为项目资源的真实 ID；handleSendMessage 会原样写入 resource_refs。
+      // id 必须为笔记资源的真实 ID；handleSendMessage 会原样写入 resource_refs。
       const attachment: Attachment = {
         id: file.id,
         name: file.name,

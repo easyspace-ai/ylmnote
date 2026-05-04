@@ -2,10 +2,10 @@ import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { 
-  FileText, Link as LinkIcon, StickyNote,
-  Upload, Plus, MoreVertical, FolderOpen, MessageCircle, Pencil, Trash2, 
-  FileOutput, ArrowLeft, Clock, ChevronRight, ChevronLeft, X, Archive, Maximize2, Minimize2, Download,
-  FileX
+  FileText, StickyNote,
+  Upload, Plus, MoreVertical, FolderOpen, MessageCircle, Pencil, Trash2,
+  FileOutput, Clock, ChevronRight, ChevronLeft, X, Archive, Maximize2, Minimize2, Download,
+  FileX, Search, Globe
 } from 'lucide-react'
 import { cn } from '@/utils'
 import { useToast } from '@/components/ui/Feedback'
@@ -23,386 +23,7 @@ import { chatApi, projectApi } from '@/services/api'
 import { API_ENDPOINTS, API_CONFIG } from '@/config/api'
 import { useQueryClient } from '@tanstack/react-query'
 
-// ===== 文件类型检测与预览工具函数 =====
-
-type PreviewType = 'html' | 'markdown' | 'image' | 'audio' | 'video' | 'ppt' | 'unsupported'
-
-interface FileTypeInfo {
-  type: PreviewType
-  ext: string
-  mimeType?: string
-}
-
-/** 根据文件名获取文件扩展名 */
-const getFileExtension = (filename?: string): string => {
-  if (!filename) return ''
-  const match = filename.match(/\.([a-zA-Z0-9]+)$/)
-  return match ? match[1].toLowerCase() : ''
-}
-
-/** 检测文件预览类型 */
-const detectPreviewType = (filename?: string): FileTypeInfo => {
-  const ext = getFileExtension(filename)
-  
-  // HTML 文件
-  if (['html', 'htm'].includes(ext)) {
-    return { type: 'html', ext, mimeType: 'text/html' }
-  }
-  
-  // Markdown 文件
-  if (ext === 'md') {
-    return { type: 'markdown', ext, mimeType: 'text/markdown' }
-  }
-  
-  // 图片文件
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)) {
-    const mimeMap: Record<string, string> = {
-      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-      gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
-      bmp: 'image/bmp', ico: 'image/x-icon'
-    }
-    return { type: 'image', ext, mimeType: mimeMap[ext] || 'image/*' }
-  }
-  
-  // 音频文件
-  if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) {
-    const mimeMap: Record<string, string> = {
-      mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
-      m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac'
-    }
-    return { type: 'audio', ext, mimeType: mimeMap[ext] || 'audio/*' }
-  }
-  
-  // 视频文件
-  if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) {
-    const mimeMap: Record<string, string> = {
-      mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
-      avi: 'video/x-msvideo', mkv: 'video/x-matroska'
-    }
-    return { type: 'video', ext, mimeType: mimeMap[ext] || 'video/*' }
-  }
-  
-  // PPT 文件（不提供预览）
-  if (['ppt', 'pptx'].includes(ext)) {
-    return { type: 'ppt', ext, mimeType: ext === 'ppt' ? 'application/vnd.ms-powerpoint' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }
-  }
-  
-  // 其他类型
-  return { type: 'unsupported', ext }
-}
-
-/** 构建预览/下载 URL */
-const buildArtifactUrl = (projectId: string, resourceId: string, type: 'preview' | 'download'): string => {
-  const baseUrl = API_CONFIG.baseUrl || ''
-  const endpoint = type === 'preview' 
-    ? API_ENDPOINTS.projectArtifactPreview(projectId, resourceId)
-    : API_ENDPOINTS.projectArtifactDownload(projectId, resourceId)
-  return `${baseUrl}${endpoint}`
-}
-
-/** 获取认证 token - 优先从 authStore (zustand persist) 获取 */
-const getAuthToken = (): string | null => {
-  // 从 zustand persist 存储中读取
-  try {
-    const authStorage = localStorage.getItem('youmind-auth')
-    if (authStorage) {
-      const authData = JSON.parse(authStorage)
-      if (authData?.state?.token) {
-        return authData.state.token
-      }
-    }
-  } catch {
-    // ignore parse error
-  }
-  // fallback: 尝试直接读取 legacy token
-  return localStorage.getItem('token') || sessionStorage.getItem('token') || null
-}
-
-// ===== Artifact 预览面板组件 =====
-
-interface ViewingResource {
-  id: string
-  name: string
-  type?: string
-  content?: string
-  url?: string | null
-}
-
-interface ArtifactPreviewPanelProps {
-  viewingResource: ViewingResource
-  projectId: string
-  isPreviewExpanded: boolean
-  onClose: () => void
-  onToggleExpand: () => void
-}
-
-/** Artifact 预览面板 - 支持多种文件类型的预览 */
-function ArtifactPreviewPanel({
-  viewingResource,
-  projectId,
-  isPreviewExpanded,
-  onClose,
-  onToggleExpand,
-}: ArtifactPreviewPanelProps) {
-  const { addToast } = useToast()
-  const fileType = useMemo(() => detectPreviewType(viewingResource.name), [viewingResource.name])
-  
-  // Markdown 内容状态
-  const [markdownContent, setMarkdownContent] = useState<string>('')
-  const [markdownLoading, setMarkdownLoading] = useState(false)
-  const [markdownError, setMarkdownError] = useState<string | null>(null)
-  
-  // 构建预览和下载 URL
-  const previewUrl = useMemo(() => {
-    const token = getAuthToken()
-    const baseUrl = buildArtifactUrl(projectId, viewingResource.id, 'preview')
-    return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl
-  }, [projectId, viewingResource.id])
-  
-  const downloadUrl = useMemo(() => {
-    const token = getAuthToken()
-    const baseUrl = buildArtifactUrl(projectId, viewingResource.id, 'download')
-    return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl
-  }, [projectId, viewingResource.id])
-  
-  // 处理下载
-  const handleDownload = useCallback(() => {
-    window.open(downloadUrl, '_blank')
-    addToast('success', '下载已开始')
-  }, [downloadUrl, addToast])
-  
-  // 获取 Markdown 内容
-  useEffect(() => {
-    if (fileType.type !== 'markdown') {
-      setMarkdownContent('')
-      setMarkdownError(null)
-      return
-    }
-    
-    // 如果有内联内容，直接使用
-    if (viewingResource.content?.trim()) {
-      setMarkdownContent(viewingResource.content)
-      return
-    }
-    
-    // 否则从 preview API 获取
-    let cancelled = false
-    setMarkdownLoading(true)
-    setMarkdownError(null)
-    
-    fetch(previewUrl, { headers: { 'Accept': 'text/markdown,text/plain,*/*' } })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const text = await res.text()
-        if (!cancelled) setMarkdownContent(text)
-      })
-      .catch((err) => {
-        if (!cancelled) setMarkdownError(err?.message || '加载失败')
-      })
-      .finally(() => {
-        if (!cancelled) setMarkdownLoading(false)
-      })
-    
-    return () => { cancelled = true }
-  }, [fileType.type, viewingResource.content, previewUrl])
-  
-  // 渲染预览内容
-  const renderPreview = () => {
-    switch (fileType.type) {
-      case 'html':
-        return (
-          <iframe
-            title={viewingResource.name}
-            className="w-full h-full border-0 bg-white"
-            src={previewUrl}
-            sandbox="allow-scripts allow-same-origin allow-popups"
-          />
-        )
-        
-      case 'markdown':
-        if (markdownLoading) {
-          return (
-            <div className="h-full flex items-center justify-center bg-white">
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <span className="w-4 h-4 rounded-full border-2 border-gray-300 border-t-gray-600 animate-spin" />
-                <span>正在加载 Markdown...</span>
-              </div>
-            </div>
-          )
-        }
-        if (markdownError) {
-          return (
-            <div className="h-full flex flex-col items-center justify-center gap-3 bg-white p-4">
-              <p className="text-sm text-gray-500">加载失败: {markdownError}</p>
-              <button
-                onClick={handleDownload}
-                className="text-xs px-3 py-1.5 rounded-md border border-gray-200 text-gray-700 hover:text-gray-900 hover:border-gray-300"
-              >
-                下载文件
-              </button>
-            </div>
-          )
-        }
-        return (
-          <div className="h-full overflow-y-auto p-4 bg-white">
-            <MarkdownRenderer content={markdownContent || '无内容'} />
-          </div>
-        )
-        
-      case 'image':
-        return (
-          <div className="h-full flex items-center justify-center bg-gray-50 p-4 overflow-auto">
-            <img
-              src={previewUrl}
-              alt={viewingResource.name}
-              className="max-w-full max-h-full object-contain shadow-lg rounded-lg"
-            />
-          </div>
-        )
-        
-      case 'audio':
-        return (
-          <div className="h-full flex flex-col items-center justify-center gap-4 bg-white p-4">
-            <div className="p-4 bg-indigo-50 rounded-full">
-              <svg className="w-12 h-12 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-              </svg>
-            </div>
-            <audio
-              controls
-              src={previewUrl}
-              className="w-full max-w-md"
-            />
-            <p className="text-xs text-gray-400">{viewingResource.name}</p>
-          </div>
-        )
-        
-      case 'video':
-        return (
-          <div className="h-full flex items-center justify-center bg-black p-4">
-            <video
-              controls
-              src={previewUrl}
-              className="max-w-full max-h-full rounded-lg"
-            />
-          </div>
-        )
-        
-      case 'ppt':
-        return (
-          <div className="h-full flex flex-col items-center justify-center gap-4 bg-white p-4">
-            <div className="p-6 bg-amber-50 rounded-2xl">
-              <svg className="w-16 h-16 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-              </svg>
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-gray-700">{viewingResource.name}</p>
-              <p className="text-sm text-gray-500 mt-2">该文件类型不支持预览，请下载后查看</p>
-            </div>
-            <button
-              onClick={handleDownload}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
-            >
-              <Download size={16} />
-              下载文件
-            </button>
-          </div>
-        )
-        
-      case 'unsupported':
-      default:
-        return (
-          <div className="h-full flex flex-col items-center justify-center gap-4 bg-white p-4">
-            <div className="p-6 bg-gray-50 rounded-2xl">
-              <FileX className="w-16 h-16 text-gray-400" />
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-gray-700">{viewingResource.name}</p>
-              <p className="text-sm text-gray-500 mt-2">该文件类型暂不支持预览</p>
-              {fileType.ext && (
-                <p className="text-xs text-gray-400 mt-1">扩展名: .{fileType.ext}</p>
-              )}
-            </div>
-            <button
-              onClick={handleDownload}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-colors"
-            >
-              <Download size={16} />
-              下载文件
-            </button>
-          </div>
-        )
-    }
-  }
-  
-  // 是否显示新标签页打开按钮（仅 HTML）
-  const showNewTabButton = fileType.type === 'html'
-  
-  return (
-    <>
-      {isPreviewExpanded && (
-        <div
-          className="fixed inset-0 bg-black/30 z-[80]"
-          onClick={onClose}
-        />
-      )}
-      <div
-        className={cn(
-          'overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl',
-          isPreviewExpanded
-            ? 'fixed inset-4 z-[90]'
-            : 'absolute inset-0 z-30'
-        )}
-      >
-        {/* 标题栏 */}
-        <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
-          <span className="text-sm font-semibold text-gray-800 truncate">{viewingResource.name}</span>
-          <div className="flex items-center gap-1.5">
-            {showNewTabButton && (
-              <button
-                onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}
-                className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-                title="在新标签页预览"
-              >
-                新标签预览
-              </button>
-            )}
-            <button
-              onClick={handleDownload}
-              className="text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-              title="下载文件"
-            >
-              下载
-            </button>
-            <button
-              onClick={onToggleExpand}
-              className="text-xs p-1.5 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-              title={isPreviewExpanded ? '缩回右栏' : '放大预览'}
-            >
-              {isPreviewExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            </button>
-            <button
-              onClick={onClose}
-              className="text-xs p-1.5 rounded-md border border-gray-200 text-gray-600 hover:text-gray-800 hover:border-gray-300"
-              title="关闭预览"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-        
-        {/* 预览内容区 */}
-        <div className="h-[calc(100%-44px)] min-h-0 overflow-hidden">
-          {renderPreview()}
-        </div>
-      </div>
-    </>
-  )
-}
-
-type ResourceType = 'documents' | 'links' | 'notes'
-type MainTabType = 'resources' | 'chat'
+import ArtifactPreviewPanel from '@/components/ArtifactPreviewPanel'
 
 const getLastSessionStorageKey = (projectId: string) => `youmind:last-session:${projectId}`
 
@@ -463,7 +84,7 @@ function ProjectHeaderMenu({ onArchive }: { onArchive: () => void }) {
               className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
             >
               <Archive size={13} className="text-gray-400" />
-              <span>归档项目</span>
+              <span>归档笔记</span>
             </button>
           </div>
         </>
@@ -536,14 +157,12 @@ export default function ProjectDetail() {
   )
   const error = useAppStore((state) => state.error)
 
-  const [activeMainTab, setActiveMainTab] = useState<MainTabType>('chat')
-  const [viewingResource, setViewingResource] = useState<{id: string, name: string, type?: string, content?: string, url?: string | null} | null>(null)
-  const [isNoteModalOpen, setIsNoteModalOpen] = useState(false)
-  const [noteForm, setNoteForm] = useState({ title: '', content: '' })
+  const [leftViewingResource, setLeftViewingResource] = useState<{id: string, name: string, type?: string, content?: string, url?: string | null} | null>(null)
+  const [isLeftPreviewExpanded, setIsLeftPreviewExpanded] = useState(false)
+  const [rightViewingResource, setRightViewingResource] = useState<{id: string, name: string, type?: string, content?: string, url?: string | null} | null>(null)
+  const [isRightPreviewExpanded, setIsRightPreviewExpanded] = useState(false)
   const [isEditingResource, setIsEditingResource] = useState(false)
   const [editContent, setEditContent] = useState('')
-  const [activeResourceTab, setActiveResourceTab] = useState<ResourceType>('documents')
-  const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null)
   const [activeStudioTool, setActiveStudioTool] = useState<string | null>(null)
   /** 点击 Studio 技能时仅填入输入框，用 seq 触发子组件同步 */
   const [studioInputPrefill, setStudioInputPrefill] = useState<{ seq: number; text: string } | null>(null)
@@ -551,8 +170,14 @@ export default function ProjectDetail() {
   const [leftWidth, setLeftWidth] = useState(280)
   const [isRightCollapsed, setIsRightCollapsed] = useState(false)
   const [rightWidth, setRightWidth] = useState(280)
-  const [isPreviewExpanded, setIsPreviewExpanded] = useState(false)
   const [uploading, setUploading] = useState(false)
+
+  // 左侧资料栏新状态
+  const [showLeftSearch, setShowLeftSearch] = useState(false)
+  const [leftSearchQuery, setLeftSearchQuery] = useState('')
+  const [showAddMenu, setShowAddMenu] = useState(false)
+  const [showAddResourceModal, setShowAddResourceModal] = useState(false)
+  const [addLinkText, setAddLinkText] = useState('')
 
   // 拖拽相关状态
   const startDragLeft = (e: React.MouseEvent) => {
@@ -603,7 +228,7 @@ export default function ProjectDetail() {
   const { setSidebarCollapsed } = useSidebarStore()
   const { addToast } = useToast()
   
-  // 进入项目详情时，收起全局导航栏
+  // 进入笔记详情时，收起全局导航栏
   useEffect(() => {
     setSidebarCollapsed(true)
     return () => { setSidebarCollapsed(false) }
@@ -613,7 +238,7 @@ export default function ProjectDetail() {
   const locationState = location.state as any;
   const initialMessage = locationState?.initialMessage || '';
   const autoSendFromState = locationState?.startChat || false;
-  // 记录“已经发送过的主题项目ID”，防止跳去别的项目还发
+  // 记录“已经发送过的主题笔记ID”，防止跳去别的笔记还发
   const hasAutoSentForProject = useRef<string | null>(null);
   
   const [isInitializing, setIsInitializing] = useState(true)
@@ -623,7 +248,7 @@ export default function ProjectDetail() {
   const historyRecoveryAtRef = useRef<Record<string, number>>({})
   const wsRecoveryAtRef = useRef<Record<string, number>>({})
 
-  // 无 session 时：加载项目与会话后重定向到第一个会话或新建
+  // 无 session 时：加载笔记与会话后重定向到第一个会话或新建
   useEffect(() => {
     if (!id || urlSessionId) return
     let cancelled = false
@@ -706,7 +331,7 @@ export default function ProjectDetail() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, urlSessionId])
 
-  // WS 连接健康检查：切项目后若长时间未连通，主动重试（用户无感）
+  // WS 连接健康检查：切笔记后若长时间未连通，主动重试（用户无感）
   useEffect(() => {
     if (!id || !urlSessionId) return
     if (wsStatus === 'connected' || wsStatus === 'connecting' || wsStatus === 'reconnecting') return
@@ -735,7 +360,7 @@ export default function ProjectDetail() {
     }
   }, [])
 
-  // 有 projectId + sessionId 时：加载项目、会话列表、该会话消息、资源
+  // 有 projectId + sessionId 时：加载笔记、会话列表、该会话消息、资源
   useEffect(() => {
     if (id && urlSessionId) {
       setIsInitializing(true)
@@ -764,7 +389,7 @@ export default function ProjectDetail() {
     }
   }, [id, urlSessionId])
 
-  // 记录当前项目最近一次打开的会话 ID，刷新后优先恢复到该会话。
+  // 记录当前笔记最近一次打开的会话 ID，刷新后优先恢复到该会话。
   useEffect(() => {
     if (!id || !urlSessionId) return
     localStorage.setItem(getLastSessionStorageKey(id), urlSessionId)
@@ -806,7 +431,7 @@ export default function ProjectDetail() {
   const handleProjectArchive = async () => {
     if (!id || !currentProject) return
     const confirmed = await confirm({
-      title: '归档项目',
+      title: '归档笔记',
       message: `确定要归档当前对话 "${currentProject.name}" 吗？`,
       confirmText: '归档',
       cancelText: '取消',
@@ -967,8 +592,6 @@ export default function ProjectDetail() {
     text: item.text,
     done: item.done,
   }))
-  const activeDocument = activeDocumentId ? docResources.find(d => d.id === activeDocumentId) : null
-
   const studioTools = promptTemplates.map((template) => {
     const styleMap: Record<string, { color: string; textColor: string }> = {
       ppt: { color: 'from-amber-100 to-amber-50', textColor: 'text-amber-700' },
@@ -1039,49 +662,6 @@ export default function ProjectDetail() {
     if (id) {
       const downloadUrl = `${API_ENDPOINTS.projectArtifactDownload(id, resource.id)}`
       window.open(downloadUrl, '_blank')
-    }
-  }
-
-  const resourceTabs = [
-    { key: 'documents' as ResourceType, label: '文档', icon: FileText, count: docResources.length },
-    { key: 'links' as ResourceType, label: '链接', icon: LinkIcon, count: linkResources.length },
-    { key: 'notes' as ResourceType, label: '笔记', icon: StickyNote, count: noteResources.length },
-  ]
-  
-  const handleAddLink = async () => {
-    if (!id) return;
-    const url = await prompt({
-      title: '添加链接',
-      message: '请输入你要添加的网页链接',
-      placeholder: '例如: https://example.com',
-    });
-    if (!url) return;
-    try {
-      addToast('info', '正在抓取链接内容...');
-      await createResource(id, { type: 'link', name: url, url: url });
-      addToast('success', '链接添加成功');
-      fetchResources(id);
-    } catch (err) {
-      console.error(err);
-      addToast('error', '添加链接失败');
-    }
-  }
-
-  const handleAddNote = async () => {
-    if (!id) return;
-    const name = await prompt({
-      title: '新建笔记',
-      message: '请输入笔记标题',
-      defaultValue: '新笔记',
-      placeholder: '笔记标题',
-    });
-    if (!name) return;
-    try {
-      await createResource(id, { type: 'note', name: name, content: '' });
-      fetchResources(id);
-    } catch (err) {
-      console.error(err);
-      addToast('error', '新建笔记失败');
     }
   }
 
@@ -1209,363 +789,309 @@ export default function ProjectDetail() {
                 style={{ writingMode: 'vertical-rl' }}
                 onClick={() => setIsLeftCollapsed(false)}
               >
-                项目资料
+                资料
               </span>
             </div>
           ) : (
             /* 展开态 */
             <div className="flex flex-col flex-1 overflow-hidden" style={{ width: `${leftWidth}px` }}>
-              {/* Tab 行 */}
-              <div className="flex items-center border-b border-gray-100 flex-shrink-0">
-                <button
-                  onClick={() => setActiveMainTab('chat')}
-                  className={cn(
-                    'flex-1 py-2.5 text-sm font-medium transition-colors duration-200 border-b-2',
-                    activeMainTab === 'chat'
-                      ? 'border-indigo-500 text-indigo-600'
-                      : 'border-transparent text-gray-400 hover:text-gray-700'
-                  )}
-                >
-                  对话
-                </button>
-                <button
-                  onClick={() => setActiveMainTab('resources')}
-                  className={cn(
-                    'flex-1 py-2.5 text-sm font-medium transition-colors duration-200 border-b-2',
-                    activeMainTab === 'resources'
-                      ? 'border-indigo-500 text-indigo-600'
-                      : 'border-transparent text-gray-400 hover:text-gray-700'
-                  )}
-                >
-                  资料
-                </button>
-                {/* 收起按钮 */}
-                <button
-                  onClick={() => setIsLeftCollapsed(true)}
-                  className="flex items-center justify-center w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors duration-200 flex-shrink-0 mr-2"
-                  title="收起资料栏"
-                >
-                  <ChevronLeft size={14} className="text-gray-500" />
-                </button>
+              {/* 标题栏 */}
+              <div className="flex items-center justify-between flex-shrink-0 border-b border-gray-100 px-4" style={{ height: '44px' }}>
+                <span className="text-sm font-semibold text-gray-800">资料</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setShowLeftSearch(v => !v)}
+                    className="flex items-center justify-center w-7 h-7 rounded-full hover:bg-gray-100 text-gray-500 transition-colors"
+                    title="搜索"
+                  >
+                    <Search size={15} />
+                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowAddMenu(v => !v)}
+                      className="flex items-center justify-center w-7 h-7 rounded-full hover:bg-gray-100 text-gray-500 transition-colors"
+                      title="添加"
+                    >
+                      <Plus size={15} />
+                    </button>
+                    {showAddMenu && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setShowAddMenu(false)} />
+                        <div className="absolute right-0 top-full mt-1 bg-white rounded-xl border border-gray-100 shadow-xl shadow-gray-900/10 z-20 min-w-[140px] py-1 animate-fade-in">
+                          <button
+                            onClick={() => {
+                              setShowAddMenu(false)
+                              setShowAddResourceModal(true)
+                            }}
+                            className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            <Upload size={14} className="text-gray-400" />
+                            <span>添加资料</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setIsLeftCollapsed(true)}
+                    className="flex items-center justify-center w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors duration-200 flex-shrink-0"
+                    title="收起资料栏"
+                  >
+                    <ChevronLeft size={14} className="text-gray-500" />
+                  </button>
+                </div>
               </div>
 
-              {/* 内容区 */}
-              <div className="flex-1 overflow-y-auto">
-                {/* 资料 tab */}
-                {activeMainTab === 'resources' && (
-                  <div>
-                    {/* 二级 tab：文档 / 链接 / 笔记 */}
-                    <div className="flex border-b border-gray-100 bg-gray-50/60 sticky top-0 z-10">
-                      {resourceTabs.map((tab) => (
-                        <button
-                          key={tab.key}
-                          onClick={() => setActiveResourceTab(tab.key)}
-                          className={cn(
-                            'flex-1 flex items-center justify-center gap-1 py-2.5 text-xs font-medium transition-colors duration-200 border-b-2',
-                            activeResourceTab === tab.key
-                              ? 'border-indigo-500 text-indigo-600'
-                              : 'border-transparent text-gray-400 hover:text-gray-600'
-                          )}
-                        >
-                          <tab.icon size={12} />
-                          <span>{tab.label}</span>
-                        </button>
-                      ))}
-                    </div>
+              {/* 搜索框 */}
+              {showLeftSearch && (
+                <div className="px-3 py-2 border-b border-gray-100 flex-shrink-0">
+                  <div className="flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2">
+                    <Search size={14} className="text-gray-400" />
+                    <input
+                      type="text"
+                      value={leftSearchQuery}
+                      onChange={(e) => setLeftSearchQuery(e.target.value)}
+                      placeholder="搜索"
+                      className="flex-1 bg-transparent text-sm outline-none text-gray-800 placeholder-gray-400"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => { setShowLeftSearch(false); setLeftSearchQuery('') }}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
 
-                    <div className="p-3 space-y-2">
-                      {activeResourceTab === 'documents' && (
-                        <>
-                          {activeDocument ? (
-                            <div className="flex flex-col gap-3">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <div className="p-1.5 bg-blue-50 rounded-md flex-shrink-0">
-                                    <FileText size={14} className="text-blue-400" />
-                                  </div>
-                                  <p className="text-xs font-medium text-gray-800 truncate">
-                                    {activeDocument.name}
-                                  </p>
-                                </div>
-                                <button
-                                  onClick={() => setActiveDocumentId(null)}
-                                  className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 transition-colors"
-                                  title="返回文档列表"
-                                >
-                                  <ArrowLeft size={14} />
-                                </button>
-                              </div>
-                              <div className="rounded-lg border border-gray-100 bg-white px-3 py-4 text-xs text-gray-500 leading-relaxed">
-                                <p className="mb-1 font-medium text-gray-700">文档预览（占位）</p>
-                                <p className="text-gray-400">
-                                  这里将展示「{activeDocument.name}」的详细内容和总结，现在仅为交互占位区域。
-                                </p>
-                              </div>
-                            </div>
-                          ) : (
+              {/* 资源列表 + 预览 */}
+              <div className="relative flex-1 overflow-hidden">
+                <div className="h-full overflow-y-auto p-3 space-y-2">
+                  {/* 正在上传的文件卡片 */}
+                  {uploadingFileName && uploadProgress && (
+                    <div className="group flex items-center gap-3 p-2.5 bg-gradient-to-r from-blue-50/80 to-indigo-50/50 border border-blue-100 rounded-lg animate-pulse">
+                      <div className="p-1.5 bg-blue-100 rounded-md flex-shrink-0">
+                        <FileText size={14} className="text-blue-500" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-blue-700 truncate">{uploadingFileName}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          {uploadProgress === 'uploading' && (
                             <>
-                              {/* 正在上传的文件卡片 */}
-                              {uploadingFileName && uploadProgress && (
-                                <div className="group flex items-center gap-3 p-2.5 bg-gradient-to-r from-blue-50/80 to-indigo-50/50 border border-blue-100 rounded-lg animate-pulse">
-                                  <div className="p-1.5 bg-blue-100 rounded-md flex-shrink-0">
-                                    <FileText size={14} className="text-blue-500" />
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-medium text-blue-700 truncate">{uploadingFileName}</p>
-                                    <div className="flex items-center gap-1.5 mt-0.5">
-                                      {uploadProgress === 'uploading' && (
-                                        <>
-                                          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" />
-                                          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:100ms]" />
-                                          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:200ms]" />
-                                          <span className="text-[10px] text-blue-500 ml-0.5">上传中</span>
-                                        </>
-                                      )}
-                                      {uploadProgress === 'parsing' && (
-                                        <>
-                                          <span className="w-3 h-3 border-2 border-blue-300 border-t-blue-500 rounded-full animate-spin" />
-                                          <span className="text-[10px] text-blue-500">解析中</span>
-                                        </>
-                                      )}
-                                      {uploadProgress === 'completed' && (
-                                        <>
-                                          <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                          </svg>
-                                          <span className="text-[10px] text-emerald-600">已完成</span>
-                                        </>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-
-                              {docResources.length > 0 ? docResources.map((doc) => (
-                                <div
-                                  key={doc.id}
-                                  onClick={() => setActiveDocumentId(doc.id)}
-                                  className="group flex items-center gap-3 p-2.5 bg-white hover:bg-gray-50 border border-gray-100 hover:border-gray-200 rounded-lg transition-all duration-200 cursor-pointer"
-                                >
-                                  <div className="p-1.5 bg-blue-50 rounded-md flex-shrink-0">
-                                    <FileText size={14} className="text-blue-400" />
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-medium text-gray-700 truncate">{doc.name}</p>
-                                    <p className="text-xs text-gray-400 mt-0.5">{doc.size || '未知大小'}</p>
-                                  </div>
-                                  <MoreMenu onRename={() => handleRename('document', doc.id)} onDelete={() => handleDelete('document', doc.id)} />
-                                </div>
-                              )) : (
-                                !uploadingFileName && (
-                                  <div className="text-center py-8">
-                                    <FileText size={28} className="text-gray-200 mx-auto mb-2" />
-                                    <p className="text-xs text-gray-400">暂无文档</p>
-                                  </div>
-                                )
-                              )}
-                              <button
-                                onClick={() => document.getElementById('file-upload')?.click()}
-                                className="flex items-center justify-center gap-1.5 w-full py-2.5 text-xs text-gray-400 hover:text-gray-600 bg-gray-50 hover:bg-gray-100 border border-dashed border-gray-200 hover:border-gray-300 rounded-lg transition-colors duration-200"
-                                disabled={isUploading}
-                              >
-                                {isUploading ? (
-                                  <span className="flex items-center gap-1.5">
-                                    <Upload size={13} className="animate-bounce" />
-                                    <span>选择文件...</span>
-                                  </span>
-                                ) : (
-                                  <>
-                                    <Upload size={13} />
-                                    <span>上传文档</span>
-                                  </>
-                                )}
-                              </button>
-                              <input type="file" id="file-upload" accept=".txt,.md,.pdf,.doc,.docx" onChange={handleUpload} className="hidden" />
+                              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" />
+                              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:100ms]" />
+                              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:200ms]" />
+                              <span className="text-[10px] text-blue-500 ml-0.5">上传中</span>
                             </>
                           )}
-                        </>
-                      )}
-
-                      {activeResourceTab === 'links' && (
-                        <>
-                          {linkResources.length > 0 ? linkResources.map((link) => (
-                            <div
-                              key={link.id}
-                              onClick={() => {
-                                setViewingResource({
-                                  id: link.id,
-                                  name: link.name,
-                                  type: link.type,
-                                  content: (link as any).content,
-                                  url: link.url,
-                                })
-                                setIsPreviewExpanded(false)
-                                setIsRightCollapsed(false)
-                                setIsEditingResource(false)
-                                setEditContent((link as any).content || '')
-                              }}
-                              className="group flex items-center gap-3 p-2.5 bg-white hover:bg-gray-50 border border-gray-100 hover:border-gray-200 rounded-lg transition-all duration-200 cursor-pointer"
-                            >
-                              <div className="p-1.5 bg-emerald-50 rounded-md flex-shrink-0">
-                                <LinkIcon size={14} className="text-emerald-400" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium text-gray-700 truncate">{link.name}</p>
-                                <p className="text-xs text-gray-400 mt-0.5 truncate">{link.url || '无链接'}</p>
-                              </div>
-                              <MoreMenu onRename={() => handleRename('link', link.id)} onDelete={() => handleDelete('link', link.id)} />
-                            </div>
-                          )) : (
-                            <div className="text-center py-8">
-                              <LinkIcon size={28} className="text-gray-200 mx-auto mb-2" />
-                              <p className="text-xs text-gray-400">暂无链接</p>
-                            </div>
+                          {uploadProgress === 'parsing' && (
+                            <>
+                              <span className="w-3 h-3 border-2 border-blue-300 border-t-blue-500 rounded-full animate-spin" />
+                              <span className="text-[10px] text-blue-500">解析中</span>
+                            </>
                           )}
-                          <button onClick={handleAddLink} className="flex items-center justify-center gap-1.5 w-full py-2.5 text-xs text-gray-400 hover:text-gray-600 bg-gray-50 hover:bg-gray-100 border border-dashed border-gray-200 hover:border-gray-300 rounded-lg transition-colors duration-200">
-                            <Plus size={13} />
-                            <span>添加链接</span>
-                          </button>
-                        </>
-                      )}
-
-                      {activeResourceTab === 'notes' && (
-                        <>
-                          {noteResources.length > 0 ? noteResources.map((note) => (
-                            <div
-                              key={note.id}
-                              onClick={() => {
-                                setViewingResource({
-                                  id: note.id,
-                                  name: note.name,
-                                  type: note.type,
-                                  content: note.content,
-                                  url: note.url,
-                                })
-                                setIsPreviewExpanded(false)
-                                setIsRightCollapsed(false)
-                                setIsEditingResource(false)
-                                setEditContent(note.content || '')
-                              }}
-                              className="group flex items-start gap-3 p-2.5 bg-white hover:bg-gray-50 border border-gray-100 hover:border-gray-200 rounded-lg transition-all duration-200 cursor-pointer"
-                            >
-                              <div className="p-1.5 bg-amber-50 rounded-md flex-shrink-0 mt-0.5">
-                                <StickyNote size={14} className="text-amber-400" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium text-gray-700">{note.name}</p>
-                                <p className="text-xs text-gray-400 mt-1 line-clamp-2">{note.content || '无内容'}</p>
-                              </div>
-                              <MoreMenu onRename={() => handleRename('note', note.id)} onDelete={() => handleDelete('note', note.id)} />
-                            </div>
-                          )) : (
-                            <div className="text-center py-8">
-                              <StickyNote size={28} className="text-gray-200 mx-auto mb-2" />
-                              <p className="text-xs text-gray-400">暂无笔记</p>
-                            </div>
+                          {uploadProgress === 'completed' && (
+                            <>
+                              <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                              <span className="text-[10px] text-emerald-600">已完成</span>
+                            </>
                           )}
-                          <button onClick={handleAddNote} className="flex items-center justify-center gap-1.5 w-full py-2.5 text-xs text-gray-400 hover:text-gray-600 bg-gray-50 hover:bg-gray-100 border border-dashed border-gray-200 hover:border-gray-300 rounded-lg transition-colors duration-200">
-                            <Plus size={13} />
-                            <span>新建笔记</span>
-                          </button>
-                        </>
-                      )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                    {/* 所有资源 */}
+                    {(() => {
+                      const query = leftSearchQuery.trim().toLowerCase()
+                      const allResources = [
+                        ...docResources.map(r => ({ ...r, kind: 'document' as const })),
+                        ...linkResources.map(r => ({ ...r, kind: 'link' as const })),
+                        ...noteResources.map(r => ({ ...r, kind: 'note' as const })),
+                      ].filter(r => !query || r.name.toLowerCase().includes(query))
 
-                {/* 对话历史 tab：当前项目下的会话列表 */}
-                {activeMainTab === 'chat' && (
-                  <div className="p-3">
-                    <div className="flex items-center justify-between mb-3">
-                      <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">对话管理</p>
-                      {/*<button */}
-                      {/*  onClick={async () => {*/}
-                      {/*    if (!id) return*/}
-                      {/*    const sess = await createSession(id, '新对话')*/}
-                      {/*    if (sess?.id) navigate(`/boards/${id}/sessions/${sess.id}`)*/}
-                      {/*  }}*/}
-                      {/*  className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"*/}
-                      {/*  title="新建对话"*/}
-                      {/*>*/}
-                      {/*  <Plus size={14} />*/}
-                      {/*</button>*/}
-                    </div>
-                    <div className="space-y-1">
-                      {sessions.filter(s => s.project_id === id).map(s => {
-                        const isActive = s.id === urlSessionId
+                      if (allResources.length === 0) {
                         return (
-                          <div 
-                            key={s.id}
-                            onClick={() => !isActive && navigate(`/boards/${id}/sessions/${s.id}`)}
-                            className={cn(
-                              "group relative flex items-center justify-between p-2.5 rounded-lg border transition-colors cursor-pointer",
-                              isActive 
-                                ? "bg-indigo-50 border-indigo-100" 
-                                : "bg-white border-transparent hover:bg-gray-50"
-                            )}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0 pr-6">
-                              <div className={cn(
-                                "p-1.5 rounded-md shadow-sm shrink-0",
-                                isActive ? "bg-white text-indigo-500" : "bg-gray-100 text-gray-400 group-hover:bg-white"
-                              )}>
-                                <MessageCircle size={14} />
-                              </div>
-                              <div className="min-w-0">
-                                <p className={cn(
-                                  "text-xs font-medium truncate",
-                                  isActive ? "text-indigo-900" : "text-gray-700"
-                                )}>{s.title}</p>
-                              </div>
-                            </div>
-                            <div className={cn("absolute right-2 opacity-0 group-hover:opacity-100 transition-opacity", isActive ? "opacity-100" : "")}>
-                              <MoreMenu 
-                                onRename={async () => {
-                                  const newName = await prompt({
-                                    title: '重命名对话',
-                                    message: '请输入新的对话名称',
-                                    defaultValue: s.title,
-                                    placeholder: '对话名称',
-                                  })
-                                  if (newName && newName !== s.title && id) {
-                                    await updateSession(id, s.id, newName)
-                                    fetchSessions(id)
-                                  }
-                                }} 
-                                onDelete={async () => {
-                                  if (!id) return
-                                  const confirmed = await confirm({
-                                    title: '删除对话',
-                                    message: '确定要删除这条对话吗？此操作不可恢复。',
-                                    variant: 'danger',
-                                    confirmText: '删除',
-                                    cancelText: '取消',
-                                  })
-                                  if (!confirmed) return
-                                  await deleteSession(id, s.id)
-                                  fetchSessions(id)
-                                  if (isActive) {
-                                    const remaining = useAppStore.getState().sessions.filter(x => x.project_id === id && x.id !== s.id)
-                                    if (remaining.length > 0) {
-                                      navigate(`/boards/${id}/sessions/${remaining[0].id}`, { replace: true })
-                                    } else {
-                                      const newSess = await createSession(id, '新对话')
-                                      if (newSess?.id) navigate(`/boards/${id}/sessions/${newSess.id}`, { replace: true })
-                                    }
-                                  }
-                                }} 
-                              />
-                            </div>
+                          <div className="text-center py-8">
+                            <FolderOpen size={28} className="text-gray-200 mx-auto mb-2" />
+                            <p className="text-xs text-gray-400">{query ? '未找到匹配的资料' : '暂无资料'}</p>
                           </div>
                         )
-                      })}
-                    </div>
+                      }
+
+                      return allResources.map((r) => {
+                        const isDoc = r.kind === 'document'
+                        const isLink = r.kind === 'link'
+                        const isNote = r.kind === 'note'
+
+                        return (
+                          <div
+                            key={r.id}
+                            onClick={() => {
+                              setLeftViewingResource({
+                                id: r.id,
+                                name: r.name,
+                                type: r.type,
+                                content: (r as any).content,
+                                url: (r as any).url,
+                              })
+                              setIsLeftPreviewExpanded(false)
+                              setIsEditingResource(false)
+                              setEditContent((r as any).content || '')
+                            }}
+                            className={cn(
+                              'cursor-pointer group flex items-center gap-3 p-2.5 rounded-lg transition-all duration-200',
+                              leftViewingResource?.id === r.id
+                                ? 'bg-indigo-50 border border-indigo-200'
+                                : 'bg-white hover:bg-gray-50 border border-gray-100 hover:border-gray-200'
+                            )}
+                          >
+                            <div className={cn(
+                              'p-1.5 rounded-md flex-shrink-0',
+                              isDoc ? 'bg-blue-50' : isLink ? 'bg-emerald-50' : 'bg-amber-50'
+                            )}>
+                              {isDoc ? <FileText size={14} className="text-blue-400" />
+                                : isLink ? <Globe size={14} className="text-emerald-400" />
+                                : <StickyNote size={14} className="text-amber-400" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-gray-700 truncate">{r.name}</p>
+                              <p className="text-xs text-gray-400 mt-0.5 truncate">
+                                {isDoc ? ((r as any).size || '文档')
+                                  : isLink ? ((r as any).url || '链接')
+                                  : ((r as any).content || '笔记').slice(0, 30)}
+                              </p>
+                            </div>
+                            <MoreMenu
+                              onRename={() => handleRename(r.kind, r.id)}
+                              onDelete={() => handleDelete(r.kind, r.id)}
+                            />
+                          </div>
+                        )
+                      })
+                    })()}
                   </div>
-                )}
-              </div>
+
+                  {/* 左侧预览面板 */}
+                  {leftViewingResource && id && (
+                    <ArtifactPreviewPanel
+                      viewingResource={leftViewingResource}
+                      projectId={id}
+                      isPreviewExpanded={isLeftPreviewExpanded}
+                      onClose={() => {
+                        setLeftViewingResource(null)
+                        setIsLeftPreviewExpanded(false)
+                      }}
+                      onToggleExpand={() => setIsLeftPreviewExpanded(v => !v)}
+                    />
+                  )}
+                </div>
             </div>
           )}
         </LeftPane>
+
+        {/* 添加资料弹窗 */}
+        {showAddResourceModal && (
+          <>
+            <div className="fixed inset-0 bg-black/30 z-[80]" onClick={() => setShowAddResourceModal(false)} />
+            <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[480px] max-w-[90vw] bg-white rounded-2xl shadow-2xl z-[90] overflow-hidden">
+              {/* 弹窗标题 */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+                <h3 className="text-base font-semibold text-gray-900">添加资料</h3>
+                <button
+                  onClick={() => setShowAddResourceModal(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5">
+                {/* 拖放上传区域 */}
+                <div
+                  className="border-2 border-dashed border-gray-200 rounded-2xl p-8 text-center hover:border-gray-300 transition-colors cursor-pointer bg-gray-50/50"
+                  onClick={() => document.getElementById('modal-file-upload')?.click()}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+                  onDrop={(e) => {
+                    e.preventDefault(); e.stopPropagation()
+                    const files = e.dataTransfer.files
+                    if (files.length > 0) {
+                      const input = document.getElementById('modal-file-upload') as HTMLInputElement
+                      if (input) {
+                        const dt = new DataTransfer()
+                        dt.items.add(files[0])
+                        input.files = dt.files
+                        input.dispatchEvent(new Event('change', { bubbles: true }))
+                      }
+                    }
+                  }}
+                >
+                  <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-white border border-gray-200 flex items-center justify-center">
+                    <Upload size={20} className="text-gray-600" />
+                  </div>
+                  <p className="text-sm font-medium text-gray-700 mb-1">拖拽文件到这里，或点击上传文件</p>
+                  <p className="text-xs text-gray-400">支持 PDF、文档、图片、音频、视频等</p>
+                  <input
+                    type="file"
+                    id="modal-file-upload"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleUpload(e)
+                      setShowAddResourceModal(false)
+                    }}
+                  />
+                </div>
+
+                {/* 链接输入区域 */}
+                <div className="mt-4">
+                  <div className="relative">
+                    <textarea
+                      value={addLinkText}
+                      onChange={(e) => setAddLinkText(e.target.value)}
+                      placeholder={'或者将链接粘贴到这里，从 YouTube、播客或任意网页添加内容\n如需添加多个链接，请使用空格或换行分隔'}
+                      className="w-full h-28 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 placeholder-gray-400 resize-none outline-none focus:border-gray-300 transition-colors"
+                    />
+                  </div>
+                  <div className="flex items-center justify-end mt-2 gap-2">
+                    <span className="text-xs text-gray-400">{addLinkText.split(/\s+/).filter(Boolean).length}/50</span>
+                    <button
+                      onClick={async () => {
+                        if (!id || !addLinkText.trim()) return
+                        const urls = addLinkText.split(/\s+/).filter(Boolean)
+                        if (urls.length === 0) return
+                        setShowAddResourceModal(false)
+                        addToast('info', '正在添加链接...')
+                        try {
+                          for (const url of urls.slice(0, 50)) {
+                            await createResource(id, { type: 'link', name: url, url })
+                          }
+                          fetchResources(id)
+                          addToast('success', `已添加 ${urls.length} 个链接`)
+                        } catch (err) {
+                          console.error(err)
+                          addToast('error', '添加链接失败')
+                        } finally {
+                          setAddLinkText('')
+                        }
+                      }}
+                      disabled={!addLinkText.trim()}
+                      className={cn(
+                        'px-4 py-1.5 rounded-full text-sm font-medium transition-colors',
+                        addLinkText.trim()
+                          ? 'bg-gray-800 text-white hover:bg-gray-900'
+                          : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      )}
+                    >
+                      添加链接
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
 
         {/* ── 中间对话区 ── */}
         <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-visible rounded-xl border border-gray-100 bg-white shadow-sm">
@@ -1644,7 +1170,7 @@ export default function ProjectDetail() {
                 style={{ height: '44px' }}
               >
                 <span className="text-sm font-semibold text-gray-800">
-                  Studio
+                  作品
                 </span>
                 <button
                   onClick={() => {
@@ -1657,53 +1183,6 @@ export default function ProjectDetail() {
                 </button>
               </div>
 
-              {/* Studio 功能网格 */}
-              <div className="flex-shrink-0 border-b border-gray-100 px-3 py-3 bg-gray-50/60">
-                <div className="grid grid-cols-2 gap-2">
-                  {studioTools.map(tool => {
-                    const isSelected = activeStudioTool === tool.id
-                    return (
-                      <button
-                        key={tool.id}
-                        onClick={() => {
-                          if (isStreaming) {
-                            addToast('info', '当前正在生成中，请稍后再试')
-                            return
-                          }
-                          // 点击已选中的技能则取消选择，否则选中
-                          handleSelectStudioTool(isSelected ? null : tool)
-                        }}
-                        disabled={isStreaming}
-                        className={cn(
-                          'relative flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-left shadow-sm transition-all duration-150',
-                          'bg-gradient-to-br',
-                          tool.color,
-                          isSelected
-                            ? 'ring-2 ring-primary-500/60 shadow-md scale-[1.02]'
-                            : 'hover:shadow-md hover:-translate-y-0.5',
-                          isStreaming && 'opacity-60 cursor-not-allowed'
-                        )}
-                      >
-                        <span className={cn('truncate', tool.textColor)}>{tool.label}</span>
-                        <span className="ml-2 text-[10px] text-gray-400">AI</span>
-                        {isSelected && (
-                          <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary-500 text-white rounded-full flex items-center justify-center text-[10px]">
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-                {studioTools.length === 0 && (
-                  <p className="text-xs text-gray-400 text-center py-2">
-                    暂无 Studio 动作，请在设置中检查五条提示词模板
-                  </p>
-                )}
-              </div>
-
               {/* 内容区域：输出列表 + 预览 或 单个资料预览 */}
               <div className="relative flex-1 min-h-0 flex flex-col">
                 <div className="flex-1 border-b border-gray-100 p-3 bg-gray-50/40 overflow-y-auto">
@@ -1712,20 +1191,20 @@ export default function ProjectDetail() {
                       <div
                         key={output.id}
                         onClick={() => {
-                          setViewingResource({
+                          setRightViewingResource({
                             id: output.id,
                             name: output.name,
                             type: output.type,
                             content: output.content,
                             url: output.url,
                           })
-                          setIsPreviewExpanded(false)
+                          setIsRightPreviewExpanded(false)
                           setIsEditingResource(false)
                           setEditContent(output.content || '')
                         }}
                         className={cn(
                           'cursor-pointer group flex items-center gap-3 p-2.5 rounded-lg transition-all duration-200',
-                          viewingResource?.id === output.id
+                          rightViewingResource?.id === output.id
                             ? 'bg-indigo-50 border border-indigo-200'
                             : 'bg-white hover:bg-gray-50 border border-gray-100 hover:border-gray-200'
                         )}
@@ -1769,16 +1248,16 @@ export default function ProjectDetail() {
               </div>
               
               {/* 预览面板 */}
-              {viewingResource && id && (
+              {rightViewingResource && id && (
                 <ArtifactPreviewPanel
-                  viewingResource={viewingResource}
+                  viewingResource={rightViewingResource}
                   projectId={id}
-                  isPreviewExpanded={isPreviewExpanded}
+                  isPreviewExpanded={isRightPreviewExpanded}
                   onClose={() => {
-                    setViewingResource(null)
-                    setIsPreviewExpanded(false)
+                    setRightViewingResource(null)
+                    setIsRightPreviewExpanded(false)
                   }}
-                  onToggleExpand={() => setIsPreviewExpanded(v => !v)}
+                  onToggleExpand={() => setIsRightPreviewExpanded(v => !v)}
                 />
               )}
             </div>

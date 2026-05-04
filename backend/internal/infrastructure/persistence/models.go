@@ -21,7 +21,7 @@ type UserModel struct {
 
 func (UserModel) TableName() string { return "users" }
 
-// ProjectModel GORM 项目表模型
+// ProjectModel GORM 笔记表模型
 type ProjectModel struct {
 	ID          string    `gorm:"primaryKey"`
 	UserID      string    `gorm:"index;not null"`

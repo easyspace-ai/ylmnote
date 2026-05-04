@@ -313,10 +313,10 @@ flowchart LR
 | 流式类型 | `yilimsdk/types/types.go` |
 | SSE 写出 | `yilimsdk/stream/sse.go` |
 | Chat 业务与同步 | `backend/internal/application/chat/service.go`（`slog`：`upstream_session_binding` / `upstream_session_binding_conflict` / `sync_session_state_skip` / `sync_session_state_done`） |
-| 项目与会话创建（含预绑定上游） | `backend/internal/application/project/service.go`（`CreateSession` / `allocateUpstreamSessionID`）、`backend/internal/interfaces/http/project_handler.go`（`createSession`） |
+| 笔记与会话创建（含预绑定上游） | `backend/internal/application/project/service.go`（`CreateSession` / `allocateUpstreamSessionID`）、`backend/internal/interfaces/http/project_handler.go`（`createSession`） |
 | HTTP 路由 | `backend/internal/interfaces/http/chat_handler.go` |
 | 前端会话消息 / 流式 / sync | `frontend/src/stores/chatConversationSlice.ts` |
-| 前端项目级 store | `frontend/src/stores/apiStore.ts` |
+| 前端笔记级 store | `frontend/src/stores/apiStore.ts` |
 | upstream-gate hook | `frontend/src/hooks/useUpstreamGate.ts` |
 | 前端 API | `frontend/src/services/api.ts` |
 

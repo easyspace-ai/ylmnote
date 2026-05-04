@@ -54,18 +54,18 @@ CREATE TABLE IF NOT EXISTS users (
 
 ---
 
-### 2.2 projects（项目表）
+### 2.2 projects（笔记表）
 
-存储用户创建的项目信息。
+存储用户创建的笔记信息。
 
 | 字段名 | 类型 | 约束 | 说明 |
 |--------|------|------|------|
-| id | TEXT | PRIMARY KEY | 项目唯一标识（UUID） |
+| id | TEXT | PRIMARY KEY | 笔记唯一标识（UUID） |
 | user_id | TEXT | REFERENCES users(id) ON DELETE SET NULL | 所属用户ID |
-| name | TEXT | NOT NULL | 项目名称 |
-| description | TEXT | NULL | 项目描述 |
+| name | TEXT | NOT NULL | 笔记名称 |
+| description | TEXT | NULL | 笔记描述 |
 | cover_image | TEXT | NULL | 封面图片URL |
-| status | TEXT | NOT NULL, DEFAULT 'active' | 项目状态（active/archived等） |
+| status | TEXT | NOT NULL, DEFAULT 'active' | 笔记状态（active/archived等） |
 | created_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 创建时间 |
 | updated_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 更新时间 |
 
@@ -87,12 +87,12 @@ CREATE TABLE IF NOT EXISTS projects (
 
 ### 2.3 sessions（会话表）
 
-存储项目下的对话会话。
+存储笔记下的对话会话。
 
 | 字段名 | 类型 | 约束 | 说明 |
 |--------|------|------|------|
 | id | TEXT | PRIMARY KEY | 会话唯一标识（UUID） |
-| project_id | TEXT | NOT NULL, REFERENCES projects(id) ON DELETE CASCADE | 所属项目ID |
+| project_id | TEXT | NOT NULL, REFERENCES projects(id) ON DELETE CASCADE | 所属笔记ID |
 | upstream_session_id | TEXT | NULL | 上游会话ID（WSS同步用） |
 | upstream_verified | INTEGER | NOT NULL, DEFAULT 0 | 上游会话验证状态（0=false, 1=true） |
 | title | TEXT | NOT NULL, DEFAULT '新对话' | 会话标题 |
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 |--------|------|------|------|
 | id | TEXT | PRIMARY KEY | 消息唯一标识（UUID） |
 | upstream_message_id | TEXT | NULL | 上游消息ID（WSS同步用） |
-| project_id | TEXT | NOT NULL, REFERENCES projects(id) ON DELETE CASCADE | 所属项目ID |
+| project_id | TEXT | NOT NULL, REFERENCES projects(id) ON DELETE CASCADE | 所属笔记ID |
 | session_id | TEXT | NOT NULL, REFERENCES sessions(id) ON DELETE CASCADE | 所属会话ID |
 | role | TEXT | NOT NULL | 消息角色（user/assistant/system） |
 | content | TEXT | NOT NULL | 消息内容 |
@@ -155,12 +155,12 @@ CREATE TABLE IF NOT EXISTS messages (
 
 ### 2.5 resources（资源表）
 
-存储项目关联的资源文件。
+存储笔记关联的资源文件。
 
 | 字段名 | 类型 | 约束 | 说明 |
 |--------|------|------|------|
 | id | TEXT | PRIMARY KEY | 资源唯一标识（UUID） |
-| project_id | TEXT | NOT NULL, REFERENCES projects(id) ON DELETE CASCADE | 所属项目ID |
+| project_id | TEXT | NOT NULL, REFERENCES projects(id) ON DELETE CASCADE | 所属笔记ID |
 | session_id | TEXT | NULL | 关联会话ID |
 | type | TEXT | NOT NULL | 资源类型（file/image/document等） |
 | name | TEXT | NOT NULL | 资源名称 |
@@ -274,7 +274,7 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
 | prompt_tokens | INTEGER | NULL | 提示词 Token 数 |
 | completion_tokens | INTEGER | NULL | 补全 Token 数 |
 | model_id | TEXT | NULL | 使用的模型ID |
-| project_id | TEXT | NULL | 关联项目ID |
+| project_id | TEXT | NULL | 关联笔记ID |
 | message_id | TEXT | NULL | 关联消息ID |
 | created_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 创建时间 |
 
@@ -330,28 +330,28 @@ skills (独立表，读多写少)
 ### 3.3 关系说明
 
 1. **users 1:N projects**
-   - 一个用户可以创建多个项目
-   - 用户删除时，项目保留但 user_id 设为 NULL
+   - 一个用户可以创建多个笔记
+   - 用户删除时，笔记保留但 user_id 设为 NULL
 
 2. **projects 1:N sessions**
-   - 一个项目下可以有多个对话会话
-   - 项目删除时，关联会话级联删除
+   - 一个笔记下可以有多个对话会话
+   - 笔记删除时，关联会话级联删除
 
 3. **projects 1:N messages**
-   - 一个项目下可以有多个消息（跨会话）
-   - 项目删除时，关联消息级联删除
+   - 一个笔记下可以有多个消息（跨会话）
+   - 笔记删除时，关联消息级联删除
 
 4. **sessions 1:N messages**
    - 一个会话下有多条消息
    - 会话删除时，关联消息级联删除
 
 5. **projects 1:N resources**
-   - 一个项目下可以有多个资源
-   - 项目删除时，关联资源级联删除
+   - 一个笔记下可以有多个资源
+   - 笔记删除时，关联资源级联删除
 
 6. **sessions 1:N resources**
    - 一个会话下可以有多个资源（可选关联）
-   - session_id 可为 NULL，表示项目级资源
+   - session_id 可为 NULL，表示笔记级资源
 
 7. **users 1:N prompt_templates**
    - 一个用户可以创建多个提示词模板
@@ -371,17 +371,17 @@ skills (独立表，读多写少)
 |--------|------|------|------|------|
 | idx_users_username | users | username | UNIQUE | 用户名唯一约束查询 |
 | idx_users_email | users | email | UNIQUE | 邮箱唯一约束查询 |
-| idx_projects_user_id | projects | user_id | 普通索引 | 按用户查询项目 |
-| idx_projects_status | projects | status | 普通索引 | 按状态筛选项目 |
-| idx_projects_updated_at | projects | updated_at DESC | 普通索引 | 项目列表按更新时间排序 |
-| idx_sessions_project_id | sessions | project_id | 普通索引 | 按项目查询会话 |
+| idx_projects_user_id | projects | user_id | 普通索引 | 按用户查询笔记 |
+| idx_projects_status | projects | status | 普通索引 | 按状态筛选笔记 |
+| idx_projects_updated_at | projects | updated_at DESC | 普通索引 | 笔记列表按更新时间排序 |
+| idx_sessions_project_id | sessions | project_id | 普通索引 | 按笔记查询会话 |
 | idx_sessions_updated_at | sessions | updated_at DESC | 普通索引 | 会话列表按更新时间排序 |
-| idx_sessions_project_upstream | sessions | (project_id, upstream_session_id) | 普通索引 | 按项目和上游会话ID查询 |
-| idx_messages_project_id_created_at | messages | (project_id, created_at) | 普通索引 | 按项目查询消息并排序 |
+| idx_sessions_project_upstream | sessions | (project_id, upstream_session_id) | 普通索引 | 按笔记和上游会话ID查询 |
+| idx_messages_project_id_created_at | messages | (project_id, created_at) | 普通索引 | 按笔记查询消息并排序 |
 | idx_messages_session_id_created_at | messages | (session_id, created_at) | 普通索引 | 按会话查询消息并排序 |
 | idx_messages_upstream_message_id | messages | upstream_message_id | 普通索引 | 按上游消息ID查询 |
 | idx_messages_session_upstream_unique | messages | (session_id, upstream_message_id) | 唯一索引（条件） | 会话内上游消息ID唯一性约束 |
-| idx_resources_project_id | resources | project_id | 普通索引 | 按项目查询资源 |
+| idx_resources_project_id | resources | project_id | 普通索引 | 按笔记查询资源 |
 | idx_resources_type | resources | type | 普通索引 | 按类型筛选资源 |
 | idx_resources_session_id | resources | session_id | 普通索引 | 按会话查询资源 |
 | idx_skills_category | skills | category | 普通索引 | 按分类筛选技能 |

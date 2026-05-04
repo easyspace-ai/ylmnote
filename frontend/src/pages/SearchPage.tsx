@@ -43,7 +43,7 @@ export default function SearchPage() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索项目、技能或文档细节..."
+            placeholder="搜索笔记、技能或文档细节..."
             className="w-full pl-12 pr-4 py-4 text-base border border-gray-200 rounded-2xl focus:outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-sm"
             autoFocus
           />
@@ -62,7 +62,7 @@ export default function SearchPage() {
                 <Search size={24} className="text-gray-300" />
               </div>
               <h3 className="text-sm font-medium text-gray-900 mb-1">全局搜索</h3>
-              <p className="text-sm text-gray-500">输入关键字以查找任意项目、对话或技能</p>
+              <p className="text-sm text-gray-500">输入关键字以查找任意笔记、对话或技能</p>
             </div>
           )}
 
@@ -72,10 +72,10 @@ export default function SearchPage() {
             </div>
           )}
 
-          {/* 项目结果 */}
+          {/* 笔记结果 */}
           {results?.projects && results.projects.length > 0 && (
             <section>
-              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">项目 & 对话 ({results.projects.length})</h2>
+              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">笔记 & 对话 ({results.projects.length})</h2>
               <div className="grid gap-2">
                 {results.projects.map((project) => (
                   <button

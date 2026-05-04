@@ -1,6 +1,6 @@
 package project
 
-// ProjectRepository 项目仓储接口
+// ProjectRepository 笔记仓储接口
 type ProjectRepository interface {
 	Create(p *Project) error
 	GetByID(id string) (*Project, error)

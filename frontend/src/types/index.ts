@@ -18,7 +18,7 @@ export interface Project {
   updated_at: string
 }
 
-/** 会话：属于项目，一个项目下可有多个会话 */
+/** 会话：属于笔记，一个笔记下可有多个会话 */
 export interface Session {
   id: string
   project_id: string

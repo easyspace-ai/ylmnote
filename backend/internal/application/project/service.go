@@ -26,7 +26,7 @@ func generateShortID() string {
 	return string(b)
 }
 
-// Service 项目应用服务
+// Service 笔记应用服务
 type Service struct {
 	projectRepo        project.ProjectRepository
 	sessionRepo        project.SessionRepository
@@ -54,17 +54,17 @@ func NewService(
 	}
 }
 
-// ListProjects 列出用户项目
+// ListProjects 列出用户笔记
 func (s *Service) ListProjects(userID string, status *string, skip, limit int) ([]*project.Project, error) {
 	return s.projectRepo.ListByUserID(userID, status, skip, limit)
 }
 
-// GetProject 获取单个项目（校验归属）
+// GetProject 获取单个笔记（校验归属）
 func (s *Service) GetProject(projectID, userID string) (*project.Project, error) {
 	return s.projectRepo.GetByIDAndUserID(projectID, userID)
 }
 
-// CreateProject 创建项目，同步创建默认会话。
+// CreateProject 创建笔记，同步创建默认会话。
 func (s *Service) CreateProject(ctx context.Context, userID, name string, description, coverImage *string) (*project.Project, error) {
 	now := time.Now().UTC()
 	p := &project.Project{
@@ -87,7 +87,7 @@ func (s *Service) CreateProject(ctx context.Context, userID, name string, descri
 	return p, nil
 }
 
-// UpdateProject 更新项目
+// UpdateProject 更新笔记
 func (s *Service) UpdateProject(projectID, userID string, name, description, coverImage, status *string) (*project.Project, error) {
 	p, err := s.projectRepo.GetByIDAndUserID(projectID, userID)
 	if err != nil {
@@ -112,17 +112,17 @@ func (s *Service) UpdateProject(projectID, userID string, name, description, cov
 	return p, nil
 }
 
-// DeleteProject 删除项目
+// DeleteProject 删除笔记
 func (s *Service) DeleteProject(projectID, userID string) error {
 	return s.projectRepo.Delete(projectID, userID)
 }
 
-// ListSessions 列出项目下的会话
+// ListSessions 列出笔记下的会话
 func (s *Service) ListSessions(projectID string, skip, limit int) ([]*project.Session, error) {
 	return s.sessionRepo.ListByProjectID(projectID, skip, limit)
 }
 
-// CreateSession 在项目下创建会话。
+// CreateSession 在笔记下创建会话。
 func (s *Service) CreateSession(ctx context.Context, projectID, title string) (*project.Session, error) {
 	now := time.Now().UTC()
 	sessionID := generateShortID()
@@ -158,12 +158,12 @@ func (s *Service) DeleteSession(projectID, sessionID string) error {
 	return s.sessionRepo.Delete(sessionID, projectID)
 }
 
-// GetSession 获取会话（校验归属项目）
+// GetSession 获取会话（校验归属笔记）
 func (s *Service) GetSession(projectID, sessionID string) (*project.Session, error) {
 	return s.sessionRepo.GetByIDAndProjectID(sessionID, projectID)
 }
 
-// ListMessages 列出项目消息（兼容旧接口，按项目维度）
+// ListMessages 列出笔记消息（兼容旧接口，按笔记维度）
 func (s *Service) ListMessages(projectID string, skip, limit int) ([]*project.Message, error) {
 	return s.messageRepo.ListByProjectID(projectID, skip, limit)
 }
@@ -207,7 +207,7 @@ func (s *Service) DeleteMessage(projectID, messageID string) error {
 	return s.messageRepo.Delete(projectID, messageID)
 }
 
-// ListResources 列出项目资源
+// ListResources 列出笔记资源
 func (s *Service) ListResources(projectID string, resourceType *string) ([]*project.Resource, error) {
 	return s.resourceRepo.ListByProjectID(projectID, resourceType)
 }
@@ -257,7 +257,7 @@ func (s *Service) DeleteResource(projectID, resourceID string) error {
 	return s.resourceRepo.Delete(projectID, resourceID)
 }
 
-// EnsureProjectBelongsToUser 校验项目归属，返回 nil 表示属于该用户
+// EnsureProjectBelongsToUser 校验笔记归属，返回 nil 表示属于该用户
 func (s *Service) EnsureProjectBelongsToUser(projectID, userID string) error {
 	_, err := s.projectRepo.GetByIDAndUserID(projectID, userID)
 	return err

@@ -1,16 +1,16 @@
-# YLMNote 项目总览
+# YLMNote 笔记总览
 
-## 项目介绍
+## 笔记介绍
 
-**项目名称**：YLMNote（YouMind Backend v2）
+**笔记名称**：YLMNote（YouMind Backend v2）
 
 **定位**：AI 驱动的知识管理平台
 
 **核心功能**：
 
-- **项目与会话管理** — 创建项目、管理会话历史、跨项目检索
+- **笔记与会话管理** — 创建笔记、管理会话历史、跨笔记检索
 - **AI 实时流式对话** — 通过 WebSocket 与上游 AI 服务双向通信，支持流式输出、中断、资源上传
-- **资源管理** — 项目内管理文件、笔记、链接等资源，AI 对话中可引用和生成
+- **资源管理** — 笔记内管理文件、笔记、链接等资源，AI 对话中可引用和生成
 - **技能系统** — 可扩展的 Skill 插件体系，定义 AI 行为模式
 - **提示词模板** — 可复用的 Prompt Template，标准化 AI 交互流程
 - **用户认证与积分系统** — JWT 认证、注册/登录、每轮对话积分扣减与余额检查
@@ -62,14 +62,14 @@ ylmnote/
 │   │   ├── application/        # 应用服务层
 │   │   │   ├── auth/           # 认证服务（注册/登录/JWT）
 │   │   │   ├── chat/           # 对话服务（WebSocket 流式通信）
-│   │   │   ├── project/        # 项目服务（CRUD + 资源管理）
+│   │   │   ├── project/        # 笔记服务（CRUD + 资源管理）
 │   │   │   ├── skill/          # 技能服务
 │   │   │   ├── user/           # 用户服务（积分余额）
 │   │   │   └── w6/             # W6 AI 网关服务（课程大纲/网页生成）
 │   │   ├── applog/             # 结构化日志初始化
 │   │   ├── config/             # 配置加载（.env → Config 结构体）
 │   │   ├── domain/             # 领域模型层
-│   │   │   ├── project/        # 项目实体 + Repository 接口
+│   │   │   ├── project/        # 笔记实体 + Repository 接口
 │   │   │   ├── skill/          # 技能实体 + Repository 接口
 │   │   │   └── user/           # 用户实体 + Repository 接口
 │   │   ├── infrastructure/     # 基础设施层
@@ -86,7 +86,7 @@ ylmnote/
 │   │   ├── components/         # UI 组件
 │   │   │   ├── ai-elements/    # AI 对话相关组件
 │   │   │   ├── layout/         # 布局组件
-│   │   │   ├── project-detail/ # 项目详情组件
+│   │   │   ├── project-detail/ # 笔记详情组件
 │   │   │   └── ui/             # 通用 UI 基础组件
 │   │   ├── config/             # 前端配置（AI 配置、API 地址）
 │   │   ├── hooks/              # 自定义 React Hooks
@@ -108,7 +108,7 @@ ylmnote/
 │   ├── cmd/server/             # SDK 独立测试入口
 │   ├── web/                    # SDK 测试页面
 │   └── go.mod
-├── doc/                        # 项目文档
+├── doc/                        # 笔记文档
 ├── .github/workflows/          # CI 配置
 ├── Makefile                    # 构建脚本
 └── ecosystem.config.js         # PM2 部署配置
@@ -126,7 +126,7 @@ ylmnote/
 ### 后端启动
 
 ```bash
-# 1. 复制环境变量模板到项目根目录
+# 1. 复制环境变量模板到笔记根目录
 cp backend/.env.example .env
 
 # 2. 编辑 .env，配置必填项
@@ -140,7 +140,7 @@ cd backend
 HTTP_PORT=40001 go run ./cmd/server/main.go
 ```
 
-后端启动后会自动运行数据库迁移。`.env` 文件应放在项目根目录（与 `backend/` 同级），程序会自动向上查找。
+后端启动后会自动运行数据库迁移。`.env` 文件应放在笔记根目录（与 `backend/` 同级），程序会自动向上查找。
 
 ### 前端启动
 
