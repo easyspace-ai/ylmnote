@@ -722,9 +722,9 @@ export default function ProjectDetail() {
     }
 
     // File size check (e.g. max 10MB limit)
-    const MAX_SIZE = 10 * 1024 * 1024;
+    const MAX_SIZE = 30 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
-        addToast('error', '文件大小不可超过 10MB');
+        addToast('error', '文件大小不可超过 30MB');
         e.target.value = '';
         return;
     }

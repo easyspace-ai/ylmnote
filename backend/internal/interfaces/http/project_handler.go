@@ -591,7 +591,7 @@ func (h *ProjectHandler) uploadFile(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "file is required"})
 		return
 	}
-	const maxUploadBytes int64 = 20 * 1024 * 1024
+	const maxUploadBytes int64 = 30 * 1024 * 1024
 	if file.Size <= 0 || file.Size > maxUploadBytes {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "file size must be between 1B and 20MB"})
 		return
